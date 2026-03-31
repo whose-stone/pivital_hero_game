@@ -1,6 +1,12 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 
 const TW=96,TH=48,MW=31,MH=31,WS=0.06,RH=60,NUM_DRIVES=4,FRAGS_PER=4;
+const USB_COLORS=[
+  {name:'red',hex:'#ff2244',led:'#ff4466',r:255,g:34,b:68},
+  {name:'blue',hex:'#2266ff',led:'#4488ff',r:34,g:102,b:255},
+  {name:'green',hex:'#22ff66',led:'#44ff88',r:34,g:255,b:102},
+  {name:'yellow',hex:'#ffdd22',led:'#ffee44',r:255,g:221,b:34},
+];
 function genMaze(w,h){const m=Array.from({length:h},()=>Array(w).fill(1));const d=[[0,-2],[0,2],[-2,0],[2,0]];
   function sh(a){for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a;}
   function c(x,y){m[y][x]=0;for(const[dx,dy]of sh([...d])){const nx=x+dx,ny=y+dy;if(nx>0&&nx<w-1&&ny>0&&ny<h-1&&m[ny][nx]===1){m[y+dy/2][x+dx/2]=0;c(nx,ny);}}}
@@ -9,6 +15,11 @@ function genMaze(w,h){const m=Array.from({length:h},()=>Array(w).fill(1));const 
 function placeOnFloor(maze,count,avoid){const items=[],av=new Set(avoid.map(p=>`${p.x},${p.y}`));let a=0;
   while(items.length<count&&a<3000){const x=1+Math.floor(Math.random()*(MW-2)),y=1+Math.floor(Math.random()*(MH-2));
     if(maze[y][x]===0&&!av.has(`${x},${y}`)){items.push({x,y});av.add(`${x},${y}`);}a++;}return items;}
+function placeOnWall(maze,count,avoid){const items=[],av=new Set(avoid.map(p=>`${p.x},${p.y}`));let a=0;
+  while(items.length<count&&a<5000){const x=1+Math.floor(Math.random()*(MW-2)),y=1+Math.floor(Math.random()*(MH-2));
+    if(maze[y][x]===1&&!av.has(`${x},${y}`)){const adjs=[[0,-1],[0,1],[-1,0],[1,0]];
+      const floorAdj=adjs.map(([dx,dy])=>({x:x+dx,y:y+dy})).filter(p=>p.x>=0&&p.x<MW&&p.y>=0&&p.y<MH&&maze[p.y][p.x]===0&&!av.has(`${p.x},${p.y}`));
+      if(floorAdj.length>0){const adj=floorAdj[Math.floor(Math.random()*floorAdj.length)];items.push({x,y,adjX:adj.x,adjY:adj.y});av.add(`${x},${y}`);av.add(`${adj.x},${adj.y}`);}}a++;}return items;}
 function toIso(gx,gy){return{x:(gx-gy)*TW/2,y:(gx+gy)*TH/2};}
 function tR(x,y,s){let h=x*374761393+y*668265263+s*1274126177;h=(h^(h>>13))*1103515245;return((h^(h>>16))&0x7fffffff)/0x7fffffff;}
 function useIsMobile(){const[m,s]=useState(false);useEffect(()=>{const c=()=>s(('ontouchstart' in window||navigator.maxTouchPoints>0)&&window.innerWidth<768);c();window.addEventListener('resize',c);return()=>window.removeEventListener('resize',c);},[]);return m;}
@@ -32,7 +43,7 @@ export default function DataCenterMaze(){
   const keysRef=useRef(new Set()),lastMoveRef=useRef(0),particlesRef=useRef([]),gRef=useRef(null);
   const walkRef=useRef({x:1,y:1,moving:false,walkCycle:0}),camRef=useRef({x:0,y:0});
   const revealedRef=useRef(new Uint8Array(MW*MH));
-  const notifRef=useRef({text:'',timer:0});const sparksRef=useRef([]);
+  const notifRef=useRef({text:'',timer:0});const sparksRef=useRef([]);const arcsRef=useRef([]);
   const[showPhone,setShowPhone]=useState(false);
   const isMobile=useIsMobile();
 
@@ -51,12 +62,16 @@ export default function DataCenterMaze(){
     const driveSpots=placeOnFloor(maze,NUM_DRIVES,avoidList);avoidList.push(...driveSpots);
     const drives=driveSpots.map((s,i)=>({...s,code:Array.from({length:4},()=>Math.floor(Math.random()*10)),collected:false,id:i}));
     const brokenServers=[];
-    for(let di=0;di<drives.length;di++){const spots=placeOnFloor(maze,FRAGS_PER,avoidList);avoidList.push(...spots);
-      spots.forEach((s,fi)=>{brokenServers.push({...s,driveId:di,position:fi,digit:drives[di].code[fi],fixed:false});});}
+    const levelColor=Math.floor(Math.random()*USB_COLORS.length);
+    for(let di=0;di<drives.length;di++){const spots=placeOnWall(maze,FRAGS_PER,avoidList);
+      spots.forEach(s=>avoidList.push({x:s.x,y:s.y},{x:s.adjX,y:s.adjY}));
+      spots.forEach((s,fi)=>{brokenServers.push({x:s.x,y:s.y,adjX:s.adjX,adjY:s.adjY,driveId:di,position:fi,digit:drives[di].code[fi],fixed:false,colorIndex:levelColor});});}
+    const usbSpots=placeOnFloor(maze,NUM_DRIVES*FRAGS_PER,avoidList);avoidList.push(...usbSpots);
+    const usbSticks=usbSpots.map((s,i)=>({...s,colorIndex:levelColor,collected:false,id:i}));
     walkRef.current={x:1,y:1,moving:false,walkCycle:0};revealedRef.current=new Uint8Array(MW*MH);
-    sparksRef.current=[];notifRef.current={text:'',timer:0};setShowPhone(false);
+    sparksRef.current=[];arcsRef.current=[];notifRef.current={text:'',timer:0};setShowPhone(false);
     const p=toIso(1,1);camRef.current={x:p.x,y:p.y};
-    const g={maze,player,drives,brokenServers,servers,score:0,totalDrives:NUM_DRIVES,won:false,flashRadius:12,fragments:[],codeEntry:null,atDrive:null};
+    const g={maze,player,drives,brokenServers,servers,score:0,totalDrives:NUM_DRIVES,won:false,flashRadius:12,fragments:[],codeEntry:null,atDrive:null,usbSticks,usbInventory:[],atBrokenServer:null,cyberdeckEntry:null,levelColor};
     gRef.current=g;setGs({...g});
   },[]);
   useEffect(()=>{initGame();},[initGame]);
@@ -64,6 +79,7 @@ export default function DataCenterMaze(){
   // Screen: ▲=NE(0,-1) ▼=SW(0,1) ◀=NW(-1,0) ▶=SE(1,0)
   const movePlayer=useCallback((dx,dy)=>{
     const g=gRef.current;if(!g||g.won)return;
+    if(g.cyberdeckEntry)return;
     if(g.codeEntry){const ce=g.codeEntry;
       if(dy===-1)ce.digits[ce.cursor]=(ce.digits[ce.cursor]+1)%10;
       else if(dy===1)ce.digits[ce.cursor]=(ce.digits[ce.cursor]+9)%10;
@@ -78,12 +94,17 @@ export default function DataCenterMaze(){
     g.player.dir={x:dx,y:dy};
     const nx=g.player.x+dx,ny=g.player.y+dy;
     if(nx>=0&&nx<MW&&ny>=0&&ny<MH&&g.maze[ny][nx]===0){
-      g.player.x=nx;g.player.y=ny;w.moving=true;g.atDrive=null;
-      // Broken server
-      for(const bs of g.brokenServers){if(!bs.fixed&&bs.x===nx&&bs.y===ny){bs.fixed=true;
-        g.fragments.push({driveId:bs.driveId,position:bs.position,digit:bs.digit});
-        notifRef.current={text:`FRAGMENT: Drive ${bs.driveId+1} · Slot ${bs.position+1} = ${bs.digit}`,timer:180};
-        const iso=toIso(nx,ny);for(let i=0;i<20;i++)particlesRef.current.push({x:iso.x,y:iso.y-30,vx:(Math.random()-0.5)*6,vy:-Math.random()*5-1,life:1,color:`hsl(${30+Math.random()*30},100%,${60+Math.random()*30}%)`});}}
+      g.player.x=nx;g.player.y=ny;w.moving=true;g.atDrive=null;g.atBrokenServer=null;
+      // USB stick pickup
+      for(const usb of g.usbSticks){if(!usb.collected&&usb.x===nx&&usb.y===ny){usb.collected=true;
+        g.usbInventory.push(usb.colorIndex);
+        const col=USB_COLORS[usb.colorIndex];
+        notifRef.current={text:`USB STICK COLLECTED: ${col.name.toUpperCase()}`,timer:180};
+        const iso=toIso(nx,ny);for(let i=0;i<20;i++)particlesRef.current.push({x:iso.x,y:iso.y-20,vx:(Math.random()-0.5)*6,vy:-Math.random()*5-1,life:1,color:col.hex});}}
+      // Check if adjacent to broken server
+      for(let i=0;i<g.brokenServers.length;i++){const bs=g.brokenServers[i];
+        if(!bs.fixed&&bs.adjX===nx&&bs.adjY===ny){g.atBrokenServer=i;
+          notifRef.current={text:'PRESS ENTER TO ACCESS SERVER',timer:999};break;}}
       // Golden drive — just mark we're at it, don't open code yet
       for(const d of g.drives){if(!d.collected&&d.x===nx&&d.y===ny){
         g.atDrive=d.id;
@@ -106,15 +127,29 @@ export default function DataCenterMaze(){
       if(g.score>=g.totalDrives)g.won=true;setGs({...g});
     }else{notifRef.current={text:'ACCESS DENIED',timer:120};g.codeEntry=null;setGs({...g});}
   },[]);
-  const cancelCode=useCallback(()=>{const g=gRef.current;if(g){g.codeEntry=null;setGs({...g});};},[]);
+  const cancelCode=useCallback(()=>{const g=gRef.current;if(g){g.codeEntry=null;g.cyberdeckEntry=null;setGs({...g});};},[]);
+
+  const openCyberdeck=useCallback(()=>{
+    const g=gRef.current;if(!g||g.atBrokenServer===null||g.cyberdeckEntry)return;
+    const bs=g.brokenServers[g.atBrokenServer];
+    const usbIdx=g.usbInventory.indexOf(bs.colorIndex);
+    const hasUsb=usbIdx!==-1;
+    if(hasUsb)g.usbInventory.splice(usbIdx,1);
+    g.cyberdeckEntry={brokenIndex:g.atBrokenServer,colorIndex:bs.colorIndex,hasUsb,phase:hasUsb?'running':'denied',timer:0};
+    notifRef.current={text:'',timer:0};setGs({...g});
+  },[]);
 
   useEffect(()=>{const kd=(e)=>{const k=e.key.toLowerCase();keysRef.current.add(k);
     if(['w','a','s','d','arrowup','arrowdown','arrowleft','arrowright','escape','enter','tab'].includes(k))e.preventDefault();
     if(k==='escape')cancelCode();
-    if(k==='enter'){const g=gRef.current;if(g&&g.codeEntry)submitCode();else if(g&&g.atDrive!==null&&!g.codeEntry)openCodeEntry();}
+    if(k==='enter'){const g=gRef.current;if(!g)return;
+      if(g.codeEntry)submitCode();
+      else if(g.cyberdeckEntry)return;
+      else if(g.atDrive!==null)openCodeEntry();
+      else if(g.atBrokenServer!==null)openCyberdeck();}
     if(k==='tab')setShowPhone(p=>!p);};
     const ku=(e)=>{keysRef.current.delete(e.key.toLowerCase());};
-    window.addEventListener('keydown',kd);window.addEventListener('keyup',ku);return()=>{window.removeEventListener('keydown',kd);window.removeEventListener('keyup',ku);};},[cancelCode,submitCode,openCodeEntry]);
+    window.addEventListener('keydown',kd);window.addEventListener('keyup',ku);return()=>{window.removeEventListener('keydown',kd);window.removeEventListener('keyup',ku);};},[cancelCode,submitCode,openCodeEntry,openCyberdeck]);
 
   useEffect(()=>{if(!gs)return;let aid;
     const loop=(ts)=>{const g=gRef.current;if(!g){aid=requestAnimationFrame(loop);return;}
@@ -130,10 +165,27 @@ export default function DataCenterMaze(){
       else{w.x=tx;w.y=ty;w.moving=false;}
       const tI=toIso(w.x,w.y);camRef.current.x+=(tI.x-camRef.current.x)*0.1;camRef.current.y+=(tI.y-camRef.current.y)*0.1;
       const rev=revealedRef.current;for(let gy2=0;gy2<MH;gy2++)for(let gx2=0;gx2<MW;gx2++){if(Math.sqrt((gx2-g.player.x)**2+(gy2-g.player.y)**2)<g.flashRadius)rev[gy2*MW+gx2]=1;}
-      for(const bs of g.brokenServers){if(bs.fixed)continue;if(Math.random()<0.08){const iso=toIso(bs.x,bs.y);sparksRef.current.push({x:iso.x+(Math.random()-0.5)*20,y:iso.y-15-Math.random()*20,vx:(Math.random()-0.5)*2,vy:-Math.random()*2,life:0.6+Math.random()*0.4});}}
-      sparksRef.current=sparksRef.current.filter(s=>{s.x+=s.vx;s.y+=s.vy;s.vy+=0.05;s.life-=0.03;return s.life>0;});
+      // Enhanced sparks for broken servers
+      for(const bs of g.brokenServers){if(bs.fixed)continue;const col=USB_COLORS[bs.colorIndex];const iso=toIso(bs.x,bs.y);
+        if(Math.random()<0.25){for(let si=0;si<2+Math.floor(Math.random()*2);si++){
+          sparksRef.current.push({x:iso.x+(Math.random()-0.5)*30,y:iso.y-15-Math.random()*40,vx:(Math.random()-0.5)*4,vy:-Math.random()*3-0.5,life:0.8+Math.random()*0.5,color:col.hex,size:1.5+Math.random()*2});}}
+        // Electrical arcs
+        if(Math.random()<0.016){const pts=[];const n=3+Math.floor(Math.random()*3);
+          for(let i=0;i<n;i++)pts.push({x:iso.x+(Math.random()-0.5)*36,y:iso.y-10-Math.random()*50});
+          arcsRef.current.push({points:pts,life:0.3+Math.random()*0.2,color:col.hex,r:col.r,g:col.g,b:col.b});}}
+      sparksRef.current=sparksRef.current.filter(s=>{s.x+=s.vx;s.y+=s.vy;s.vy+=0.05;s.life-=0.025;return s.life>0;});
+      arcsRef.current=arcsRef.current.filter(a=>{a.life-=0.03;return a.life>0;});
       particlesRef.current=particlesRef.current.filter(p=>{p.x+=p.vx;p.y+=p.vy;p.vy+=0.1;p.life-=0.02;return p.life>0;});
-      if(notifRef.current.timer>0&&!(g.atDrive!==null&&!g.codeEntry))notifRef.current.timer--;
+      // Cyberdeck timer
+      if(g.cyberdeckEntry){g.cyberdeckEntry.timer++;
+        if(g.cyberdeckEntry.phase==='denied'&&g.cyberdeckEntry.timer>120){g.cyberdeckEntry=null;}
+        if(g.cyberdeckEntry&&g.cyberdeckEntry.phase==='running'&&g.cyberdeckEntry.timer>180){
+          const bs=g.brokenServers[g.cyberdeckEntry.brokenIndex];bs.fixed=true;
+          g.fragments.push({driveId:bs.driveId,position:bs.position,digit:bs.digit});
+          notifRef.current={text:`FRAGMENT: Drive ${bs.driveId+1} · Slot ${bs.position+1} = ${bs.digit}`,timer:180};
+          const iso=toIso(bs.x,bs.y);for(let i=0;i<25;i++)particlesRef.current.push({x:iso.x,y:iso.y-30,vx:(Math.random()-0.5)*6,vy:-Math.random()*5-1,life:1,color:USB_COLORS[bs.colorIndex].hex});
+          g.cyberdeckEntry=null;g.atBrokenServer=null;}}
+      if(notifRef.current.timer>0&&!(g.atDrive!==null&&!g.codeEntry)&&!(g.atBrokenServer!==null&&!g.cyberdeckEntry))notifRef.current.timer--;
       draw(ts,g);aid=requestAnimationFrame(loop);};
     aid=requestAnimationFrame(loop);return()=>cancelAnimationFrame(aid);
   },[gs,isMobile,movePlayer]);
@@ -152,19 +204,27 @@ export default function DataCenterMaze(){
     for(let gy=0;gy<MH;gy++)for(let gx=0;gx<MW;gx++)litMap[gy*MW+gx]=computeLit(gx,gy,player,g);
     // Build golden drive set for glow
     const driveSet=new Set();for(const d of drives){if(!d.collected)driveSet.add(d.y*MW+d.x);}
+    // Build broken server lookup map (wall tiles)
+    const brokenMap=new Map();for(const bs of brokenServers){if(!bs.fixed)brokenMap.set(`${bs.x},${bs.y}`,bs);}
+    // Build USB stick lookup map (floor tiles)
+    const usbMap=new Map();for(const usb of g.usbSticks){if(!usb.collected)usbMap.set(`${usb.x},${usb.y}`,usb);}
     const pD=player.x+player.y;const tiles=[];
     for(let gy=0;gy<MH;gy++)for(let gx=0;gx<MW;gx++)tiles.push({gx,gy,d:gx+gy});tiles.sort((a,b)=>a.d-b.d);
     let pDrawn=false;
-    const drawBrokenInRange=(min,max)=>{for(const bs of brokenServers){if(bs.fixed)continue;const dd=bs.x+bs.y;if(dd>min&&dd<=max){const iso=toIso(bs.x,bs.y);const br=litMap[bs.y*MW+bs.x];if(br<0.005&&!rev[bs.y*MW+bs.x])continue;drawBroken(ctx,iso.x,iso.y,Math.max(0.05,br),ts);}}};
     for(const{gx,gy}of tiles){const td=gx+gy;
-      if(!pDrawn&&td>pD){drawBrokenInRange(-999,pD);drawAgent(ctx,pIso.x,pIso.y,ts,player,w);drawBeam(ctx,pIso.x,pIso.y,player,g);drawBrokenInRange(pD,td);pDrawn=true;}
+      if(!pDrawn&&td>pD){drawAgent(ctx,pIso.x,pIso.y,ts,player,w);drawBeam(ctx,pIso.x,pIso.y,player,g);pDrawn=true;}
       const idx=gy*MW+gx,lit=litMap[idx],revealed=rev[idx]===1;if(!revealed&&lit<0.005)continue;const iso=toIso(gx,gy);
       const isGold=driveSet.has(idx);
-      if(maze[gy][gx]===0)drawFloor(ctx,iso.x,iso.y,revealed?Math.max(0.04,lit):lit,isGold?ts:0);
-      else drawRack(ctx,iso.x,iso.y,revealed?Math.max(0.06,lit):lit,ts,servers.find(s=>s.x===gx&&s.y===gy),gx,gy,isGold?ts:0);}
-    if(!pDrawn){drawBrokenInRange(-999,pD);drawAgent(ctx,pIso.x,pIso.y,ts,player,w);drawBeam(ctx,pIso.x,pIso.y,player,g);}
-    drawBrokenInRange(pD,9999);
-    for(const s of sparksRef.current){ctx.globalAlpha=s.life;ctx.fillStyle=`hsl(${30+Math.random()*20},100%,${60+Math.random()*30}%)`;ctx.beginPath();ctx.arc(s.x,s.y,1.5*s.life,0,Math.PI*2);ctx.fill();ctx.globalAlpha=1;}
+      if(maze[gy][gx]===0){drawFloor(ctx,iso.x,iso.y,revealed?Math.max(0.04,lit):lit,isGold?ts:0);
+        const usb=usbMap.get(`${gx},${gy}`);if(usb)drawUsbStick(ctx,iso.x,iso.y,usb.colorIndex,ts,revealed?Math.max(0.04,lit):lit);}
+      else{const bsInfo=brokenMap.get(`${gx},${gy}`);
+        drawRack(ctx,iso.x,iso.y,revealed?Math.max(0.06,lit):lit,ts,servers.find(s=>s.x===gx&&s.y===gy),gx,gy,isGold?ts:0,bsInfo);}}
+    if(!pDrawn){drawAgent(ctx,pIso.x,pIso.y,ts,player,w);drawBeam(ctx,pIso.x,pIso.y,player,g);}
+    // Sparks with color and glow
+    for(const s of sparksRef.current){ctx.globalAlpha=s.life;ctx.fillStyle=s.color||`hsl(${30+Math.random()*20},100%,70%)`;ctx.beginPath();ctx.arc(s.x,s.y,(s.size||1.5)*s.life,0,Math.PI*2);ctx.fill();ctx.globalAlpha=1;}
+    // Electrical arcs
+    for(const a of arcsRef.current){if(a.points.length<2)continue;ctx.globalAlpha=a.life*2;ctx.strokeStyle=a.color;ctx.lineWidth=1.5;ctx.shadowBlur=8;ctx.shadowColor=`rgba(${a.r},${a.g},${a.b},0.8)`;
+      ctx.beginPath();ctx.moveTo(a.points[0].x,a.points[0].y);for(let i=1;i<a.points.length;i++)ctx.lineTo(a.points[i].x,a.points[i].y);ctx.stroke();ctx.shadowBlur=0;ctx.globalAlpha=1;}
     for(const p of particlesRef.current){ctx.globalAlpha=p.life;ctx.fillStyle=p.color;ctx.beginPath();ctx.arc(p.x,p.y,2.5*p.life,0,Math.PI*2);ctx.fill();ctx.globalAlpha=1;}
     ctx.restore();
     const vg=ctx.createRadialGradient(W/2,H/2,W*0.3,W/2,H/2,Math.max(W,H)*0.55);vg.addColorStop(0,'rgba(0,0,0,0)');vg.addColorStop(0.7,'rgba(0,0,0,0.04)');vg.addColorStop(1,'rgba(0,0,0,0.4)');ctx.fillStyle=vg;ctx.fillRect(0,0,W,H);
@@ -172,9 +232,10 @@ export default function DataCenterMaze(){
     if(notifRef.current.timer>0){const n=notifRef.current;const a=Math.min(1,n.timer/30);ctx.globalAlpha=a;
       ctx.font='bold 13px "JetBrains Mono",monospace';const tw=ctx.measureText(n.text).width;
       ctx.fillStyle='rgba(0,0,0,0.7)';ctx.fillRect(W/2-tw/2-20,H-100,tw+40,36);
-      ctx.fillStyle=n.text.includes('DENIED')?'#ff4444':n.text.includes('RECOVERED')?'#ffd700':n.text.includes('ENTER')? '#ffd700':'#0ff';
+      ctx.fillStyle=n.text.includes('DENIED')?'#ff4444':n.text.includes('RECOVERED')?'#ffd700':n.text.includes('ENTER')||n.text.includes('SERVER')?'#ffd700':n.text.includes('COLLECTED')?USB_COLORS[g.levelColor].hex:'#0ff';
       ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(n.text,W/2,H-82);ctx.globalAlpha=1;}
-    if(g.codeEntry)drawCodeEntry(ctx,W,H,g);};
+    if(g.codeEntry)drawCodeEntry(ctx,W,H,g);
+    if(g.cyberdeckEntry)drawCyberdeck(ctx,W,H,g);};
 
   const phoneUI=gs&&showPhone&&!gs.codeEntry?(
     <div style={{position:'absolute',top:'50%',left:'50%',transform:'translate(-50%,-50%)',width:280,background:'#0a0c12',border:'2px solid #1a2040',borderRadius:16,padding:16,boxShadow:'0 8px 40px rgba(0,0,0,0.8)',zIndex:10,fontFamily:'"JetBrains Mono",monospace'}}>
@@ -195,7 +256,8 @@ export default function DataCenterMaze(){
             </div>}
           </div>))}
       </div>
-      <div style={{color:'#334',fontSize:9,marginTop:8,textAlign:'center'}}>Fix ⚡ servers to reveal digits</div>
+      <div style={{color:USB_COLORS[gs.levelColor].hex,fontSize:9,marginTop:8,textAlign:'center'}}>USB sticks: {gs.usbInventory.length} in inventory</div>
+      <div style={{color:'#334',fontSize:9,marginTop:4,textAlign:'center'}}>Find {USB_COLORS[gs.levelColor].name} USB sticks to repair servers</div>
     </div>):null;
 
   return (
@@ -208,6 +270,7 @@ export default function DataCenterMaze(){
             <div style={{display:'flex',gap:5,flexWrap:'wrap'}}>
               <button onClick={()=>setShowPhone(p=>!p)} style={{background:'rgba(0,170,255,0.1)',color:'#0af',border:'1px solid rgba(0,170,255,0.3)',padding:'5px 10px',borderRadius:5,fontFamily:'inherit',fontSize:10,touchAction:'manipulation'}}>📱 Codes</button>
               {gs?.atDrive!==null&&!gs?.codeEntry&&<button onClick={openCodeEntry} style={{background:'#ffd700',color:'#000',border:'none',padding:'5px 12px',borderRadius:5,fontFamily:'inherit',fontWeight:'bold',fontSize:11,touchAction:'manipulation'}}>ACCESS DRIVE</button>}
+              {gs?.atBrokenServer!==null&&!gs?.cyberdeckEntry&&<button onClick={openCyberdeck} style={{background:USB_COLORS[gs.levelColor].hex,color:'#000',border:'none',padding:'5px 12px',borderRadius:5,fontFamily:'inherit',fontWeight:'bold',fontSize:11,touchAction:'manipulation'}}>ACCESS SERVER</button>}
               {gs?.codeEntry&&<><button onClick={submitCode} style={{background:'#ffd700',color:'#000',border:'none',padding:'5px 12px',borderRadius:5,fontFamily:'inherit',fontWeight:'bold',fontSize:11,touchAction:'manipulation'}}>SUBMIT</button>
               <button onClick={cancelCode} style={{background:'transparent',color:'#888',border:'1px solid #333',padding:'5px 8px',borderRadius:4,fontFamily:'inherit',fontSize:10,touchAction:'manipulation'}}>BACK</button></>}
               {gs?.won&&<button onClick={initGame} style={{background:'#ffd700',color:'#000',border:'none',padding:'6px 14px',borderRadius:6,fontFamily:'inherit',fontWeight:'bold',fontSize:12,touchAction:'manipulation'}}>Play Again</button>}
@@ -239,10 +302,26 @@ function drawFloor(ctx,x,y,br,glowTs){const hw=TW/2,hh=TH/2;ctx.save();ctx.globa
     for(let i=1;i<subN;i++){const t=i/subN;ctx.beginPath();ctx.moveTo(x-hw+hw*t,y-hh*t);ctx.lineTo(x+hw*t,y+hh*(1-t));ctx.stroke();ctx.beginPath();ctx.moveTo(x+hw-hw*t,y-hh*t);ctx.lineTo(x-hw*t,y+hh*(1-t));ctx.stroke();}}
   ctx.restore();}
 
-function drawBroken(ctx,x,y,br,ts){ctx.save();ctx.globalAlpha=Math.min(1,br+0.05);
-  const sz=8,by=y-10;ctx.beginPath();ctx.moveTo(x,by-sz);ctx.lineTo(x+sz,by+sz*0.6);ctx.lineTo(x-sz,by+sz*0.6);ctx.closePath();
-  ctx.fillStyle=`rgba(255,${Math.floor(100+Math.sin(ts/200)*50)},0,${0.5+Math.sin(ts/150)*0.3})`;ctx.fill();
-  ctx.font='bold 8px monospace';ctx.fillStyle='#000';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('⚡',x,by);
+function drawUsbStick(ctx,x,y,colorIndex,ts,br){ctx.save();
+  const col=USB_COLORS[colorIndex];const bob=Math.sin(ts/400+colorIndex*1.5)*3;
+  const ux=x,uy=y-12+bob;ctx.globalAlpha=Math.min(1,br*2+0.15);
+  // Glow
+  ctx.shadowBlur=10;ctx.shadowColor=col.hex;
+  // USB body (small isometric rectangle)
+  ctx.fillStyle=col.hex;ctx.beginPath();
+  ctx.moveTo(ux-4,uy-2);ctx.lineTo(ux+2,uy-5);ctx.lineTo(ux+6,uy-3);ctx.lineTo(ux,uy);ctx.closePath();ctx.fill();
+  // USB top
+  ctx.fillStyle=col.led;ctx.beginPath();
+  ctx.moveTo(ux-4,uy-2);ctx.lineTo(ux+2,uy-5);ctx.lineTo(ux+2,uy-9);ctx.lineTo(ux-4,uy-6);ctx.closePath();ctx.fill();
+  // USB side
+  ctx.fillStyle=`rgba(${Math.floor(col.r*0.6)},${Math.floor(col.g*0.6)},${Math.floor(col.b*0.6)},1)`;ctx.beginPath();
+  ctx.moveTo(ux+2,uy-5);ctx.lineTo(ux+6,uy-3);ctx.lineTo(ux+6,uy-7);ctx.lineTo(ux+2,uy-9);ctx.closePath();ctx.fill();
+  // Connector tab
+  ctx.fillStyle='#aaa';ctx.beginPath();
+  ctx.moveTo(ux-2,uy-6.5);ctx.lineTo(ux+1,uy-8);ctx.lineTo(ux+1,uy-10);ctx.lineTo(ux-2,uy-8.5);ctx.closePath();ctx.fill();
+  ctx.shadowBlur=0;
+  // Floor highlight
+  ctx.globalAlpha=0.15*Math.min(1,br);ctx.fillStyle=col.hex;ctx.beginPath();ctx.ellipse(x,y,8,4,0,0,Math.PI*2);ctx.fill();
   ctx.globalAlpha=1;ctx.restore();}
 
 /*
@@ -252,7 +331,7 @@ function drawBroken(ctx,x,y,br,ts){ctx.save();ctx.globalAlpha=Math.min(1,br+0.05
  * Right face: (x+hw, y-RH) → (x, y+hh-RH) → (x, y+hh) → (x+hw, y)
  * Bottom edges are parallel to top edges.
  */
-function drawRack(ctx,x,y,br,ts,srv,gx,gy,goldTs){
+function drawRack(ctx,x,y,br,ts,srv,gx,gy,goldTs,bsInfo){
   const hw=TW/2,hh=TH/2,rH=RH,type=srv?srv.type:'tall',m=br;
   const leftC=`rgb(${Math.floor(6+m*52)},${Math.floor(7+m*56)},${Math.floor(10+m*72)})`;
   const rightC=`rgb(${Math.floor(8+m*60)},${Math.floor(9+m*64)},${Math.floor(12+m*82)})`;
@@ -285,7 +364,12 @@ function drawRack(ctx,x,y,br,ts,srv,gx,gy,goldTs){
   for(let i=1;i<sc;i++){const off=i*(rH/sc);ctx.beginPath();ctx.moveTo(x,y+hh-rH+off);ctx.lineTo(x+hw,y-rH+off);ctx.strokeStyle=lineC;ctx.lineWidth=0.6;ctx.stroke();}
 
   // LEDs
-  if(srv){srv.lights.forEach(l=>{const bv=Math.sin(ts/1000*l.blink+l.offset);if(bv>-0.2){const vis=Math.max(0.12,Math.max(0,(bv+0.2)/1.2)*Math.min(1,m*2.5));ctx.globalAlpha=vis;ctx.fillStyle=l.color;ctx.beginPath();ctx.arc(x+hw*l.xPos,y-rH+rH*l.yPos,1.4,0,Math.PI*2);ctx.fill();ctx.globalAlpha=1;}});}
+  if(bsInfo&&!bsInfo.fixed){const col=USB_COLORS[bsInfo.colorIndex];
+    if(srv){srv.lights.forEach(l=>{const bv=Math.sin(ts/150+l.offset*2);const vis=Math.max(0.3,(bv*0.5+0.5)*Math.min(1,m*3));ctx.globalAlpha=vis;ctx.shadowBlur=6;ctx.shadowColor=col.hex;ctx.fillStyle=col.led;ctx.beginPath();ctx.arc(x+hw*l.xPos,y-rH+rH*l.yPos,2.5,0,Math.PI*2);ctx.fill();ctx.shadowBlur=0;ctx.globalAlpha=1;});}
+    // Additional dramatic LEDs on left face
+    for(let i=0;i<4;i++){const bv=Math.sin(ts/120+i*1.5);const vis=Math.max(0.2,(bv*0.5+0.5)*Math.min(1,m*3));ctx.globalAlpha=vis;ctx.shadowBlur=5;ctx.shadowColor=col.hex;ctx.fillStyle=col.led;
+      const lt=0.15+i*0.2,ly=0.15+i*0.22;ctx.beginPath();ctx.arc(x-hw+hw*lt,y-rH+rH*ly+hh*lt,2,0,Math.PI*2);ctx.fill();ctx.shadowBlur=0;ctx.globalAlpha=1;}}
+  else if(srv){srv.lights.forEach(l=>{const bv=Math.sin(ts/1000*l.blink+l.offset);if(bv>-0.2){const vis=Math.max(0.12,Math.max(0,(bv+0.2)/1.2)*Math.min(1,m*2.5));ctx.globalAlpha=vis;ctx.fillStyle=l.color;ctx.beginPath();ctx.arc(x+hw*l.xPos,y-rH+rH*l.yPos,1.4,0,Math.PI*2);ctx.fill();ctx.globalAlpha=1;}});}
   // Cables
   if(srv){const nC=type==='network'?4:type==='blade'?3:2;const cC=[[0,70,160],[160,40,0],[0,130,80],[100,0,120]];
     for(let ci=0;ci<nC;ci++){const cx0=x-hw+2+ci*2.5,cy0=y-rH+6+ci*5,cmx=x-hw-2-ci*1.5,cmy=y-rH*0.45+ci*3,cex=x-hw+1+ci*2,cey=y-4-ci,cc=cC[ci%4];
@@ -294,8 +378,14 @@ function drawRack(ctx,x,y,br,ts,srv,gx,gy,goldTs){
   // Center seam
   ctx.beginPath();ctx.moveTo(x,y+hh-rH);ctx.lineTo(x,y+hh);ctx.strokeStyle=lineC;ctx.lineWidth=0.5;ctx.stroke();
 
+  // Broken server color pulsing overlay
+  if(bsInfo&&!bsInfo.fixed){const col=USB_COLORS[bsInfo.colorIndex];const pulse=0.08+Math.sin(ts/200)*0.06;
+    ctx.globalAlpha=pulse*Math.max(0.2,m);ctx.fillStyle=`rgba(${col.r},${col.g},${col.b},0.5)`;
+    ctx.beginPath();ctx.moveTo(x-hw,y-rH);ctx.lineTo(x,y+hh-rH);ctx.lineTo(x,y+hh);ctx.lineTo(x-hw,y);ctx.closePath();ctx.fill();
+    ctx.beginPath();ctx.moveTo(x+hw,y-rH);ctx.lineTo(x,y+hh-rH);ctx.lineTo(x,y+hh);ctx.lineTo(x+hw,y);ctx.closePath();ctx.fill();
+    ctx.globalAlpha=1;}
   // Golden glow overlay on rack faces if this is a drive tile neighbor
-  if(goldTs>0){const pulse=0.12+Math.sin(goldTs/400)*0.06;
+  else if(goldTs>0){const pulse=0.12+Math.sin(goldTs/400)*0.06;
     ctx.globalAlpha=pulse*Math.max(0.2,m);ctx.fillStyle='rgba(255,200,0,0.5)';
     ctx.beginPath();ctx.moveTo(x-hw,y-rH);ctx.lineTo(x,y+hh-rH);ctx.lineTo(x,y+hh);ctx.lineTo(x-hw,y);ctx.closePath();ctx.fill();
     ctx.beginPath();ctx.moveTo(x+hw,y-rH);ctx.lineTo(x,y+hh-rH);ctx.lineTo(x,y+hh);ctx.lineTo(x+hw,y);ctx.closePath();ctx.fill();
@@ -317,9 +407,49 @@ function drawCodeEntry(ctx,W,H,g){const ce=g.codeEntry;
     if(ic){ctx.font='12px monospace';ctx.fillStyle='#0af';ctx.fillText('▲',bx+bW/2,by-20);ctx.fillText('▼',bx+bW/2,by+bH2+16);}}
   const frags=g.fragments.filter(f=>f.driveId===ce.driveId);
   ctx.font='12px "JetBrains Mono",monospace';ctx.fillStyle='#888';ctx.fillText('KNOWN FRAGMENTS:',cx,cy+55);
-  if(frags.length===0){ctx.fillStyle='#555';ctx.fillText('None — fix ⚡ broken servers to find codes',cx,cy+75);}
+  if(frags.length===0){ctx.fillStyle='#555';ctx.fillText('None — use USB sticks to repair servers',cx,cy+75);}
   else{ctx.fillStyle='#0f0';ctx.fillText(frags.map(f=>`Slot${f.position+1}=${f.digit}`).join('   '),cx,cy+75);}
   ctx.font='11px "JetBrains Mono",monospace';ctx.fillStyle='#445';ctx.fillText('▲▼ change digit · ◀▶ move slot · Enter submit · Esc cancel',cx,cy+105);}
+
+/* ===== CYBERDECK POPUP ===== */
+function drawCyberdeck(ctx,W,H,g){const cd=g.cyberdeckEntry;if(!cd)return;
+  const col=USB_COLORS[cd.colorIndex],t=cd.timer;
+  ctx.fillStyle='rgba(0,0,0,0.8)';ctx.fillRect(0,0,W,H);
+  const cx=W/2,cy=H/2,bw=360,bh=240;
+  // Terminal window
+  ctx.strokeStyle=col.hex;ctx.lineWidth=2;ctx.fillStyle='rgba(5,8,15,0.95)';
+  ctx.fillRect(cx-bw/2,cy-bh/2,bw,bh);ctx.strokeRect(cx-bw/2,cy-bh/2,bw,bh);
+  // Scanlines
+  ctx.globalAlpha=0.03;ctx.fillStyle=col.hex;for(let i=0;i<bh;i+=3)ctx.fillRect(cx-bw/2,cy-bh/2+i,bw,1);ctx.globalAlpha=1;
+  // Title bar
+  ctx.fillStyle=`rgba(${col.r},${col.g},${col.b},0.15)`;ctx.fillRect(cx-bw/2,cy-bh/2,bw,24);
+  ctx.font='bold 11px "JetBrains Mono",monospace';ctx.textAlign='left';ctx.textBaseline='middle';
+  ctx.fillStyle=col.hex;ctx.fillText('CYBERDECK v2.1 — SERVER DIAGNOSTIC',cx-bw/2+10,cy-bh/2+12);
+  // Content area
+  const ly=cy-bh/2+40,lh=16;ctx.font='12px "JetBrains Mono",monospace';
+  if(cd.phase==='denied'){
+    if(t<40){ctx.fillStyle=col.hex;ctx.fillText('> SCANNING...',cx-bw/2+12,ly);
+      // Animated dots
+      const dots='.'.repeat(Math.floor(t/10)%4);ctx.fillText(`  ${dots}`,cx-bw/2+120,ly);}
+    else if(t<80){ctx.fillStyle=col.hex;ctx.fillText('> SCANNING... COMPLETE',cx-bw/2+12,ly);
+      ctx.fillStyle='#ff4444';ctx.fillText(`> ERROR: NO ${col.name.toUpperCase()} USB STICK DETECTED`,cx-bw/2+12,ly+lh);}
+    else{ctx.fillStyle=col.hex;ctx.fillText('> SCANNING... COMPLETE',cx-bw/2+12,ly);
+      ctx.fillStyle='#ff4444';ctx.fillText(`> ERROR: NO ${col.name.toUpperCase()} USB STICK DETECTED`,cx-bw/2+12,ly+lh);
+      ctx.font='bold 16px "JetBrains Mono",monospace';ctx.textAlign='center';
+      const flash=Math.sin(t/8)>0?1:0.4;ctx.globalAlpha=flash;ctx.fillStyle='#ff4444';ctx.fillText('ACCESS DENIED',cx,ly+lh*3.5);ctx.globalAlpha=1;}}
+  else if(cd.phase==='running'){
+    const lines=[`> USB STICK DETECTED: ${col.name.toUpperCase()}`,'> Mounting device...','> Running repair script...','> Patching firmware...','> Restoring data block...','> FRAGMENT RECOVERED'];
+    const lineDelay=28;
+    for(let i=0;i<lines.length;i++){if(t>i*lineDelay){
+      const isLast=i===lines.length-1;ctx.fillStyle=i===0?col.hex:isLast?'#22ff66':'#8899aa';
+      if(isLast)ctx.font='bold 12px "JetBrains Mono",monospace';else ctx.font='12px "JetBrains Mono",monospace';
+      // Typewriter effect for current line
+      const lineAge=t-i*lineDelay;const chars=Math.min(lines[i].length,Math.floor(lineAge*1.5));
+      ctx.fillText(lines[i].substring(0,chars),cx-bw/2+12,ly+i*lh);}}
+    // Progress bar
+    const prog=Math.min(1,t/170);ctx.fillStyle='rgba(255,255,255,0.1)';ctx.fillRect(cx-bw/2+12,cy+bh/2-30,bw-24,8);
+    ctx.fillStyle=col.hex;ctx.fillRect(cx-bw/2+12,cy+bh/2-30,(bw-24)*prog,8);}
+  ctx.textAlign='left';}
 
 /* ===== AGENT — taller, centered, clean head ===== */
 function drawAgent(ctx,x,y,ts,player,walk){ctx.save();const f=player.facing;
@@ -402,7 +532,9 @@ function drawHUD(ctx,W,H,g,ts,mob){const fs=mob?10:14,sf=mob?9:11,bH=mob?28:38;
   ctx.font=`bold ${fs}px "JetBrains Mono","Fira Code",monospace`;ctx.fillStyle='#0af';ctx.textAlign='left';ctx.fillText('◆ DATACENTER BREACH',10,bH*0.65);
   ctx.textAlign='right';ctx.fillStyle='#ffd700';let st='';for(let i=0;i<g.totalDrives;i++)st+=i<g.score?'◆ ':'◇ ';ctx.fillText(st,W-10,bH*0.65);
   ctx.font=`${sf}px "JetBrains Mono","Fira Code",monospace`;ctx.fillStyle='#556';ctx.fillText(`${g.score}/${g.totalDrives} DRIVES`,W-10,bH*0.35);
-  ctx.textAlign='left';ctx.fillStyle='#f84';ctx.fillText(`⚡ ${g.fragments.length}/${g.totalDrives*FRAGS_PER}`,10,bH*0.35);
+  ctx.textAlign='left';const col=USB_COLORS[g.levelColor];ctx.fillStyle=col.hex;ctx.fillText(`◈ ${g.fragments.length}/${g.totalDrives*FRAGS_PER} FRAGS`,10,bH*0.35);
+  // USB inventory indicator
+  const usbX=mob?130:180;ctx.font=`${sf}px "JetBrains Mono","Fira Code",monospace`;ctx.fillStyle='#556';ctx.fillText(`USB: ${g.usbInventory.length}`,usbX,bH*0.35);
   if(g.won){ctx.fillStyle='rgba(0,0,0,0.7)';ctx.fillRect(0,0,W,H);const p=0.8+Math.sin(ts/300)*0.2;ctx.textAlign='center';
     ctx.font=`bold ${mob?18:30}px "JetBrains Mono","Fira Code",monospace`;ctx.fillStyle=`rgba(255,215,0,${p})`;ctx.fillText('◆ MISSION COMPLETE ◆',W/2,H/2-20);
     ctx.font=`${mob?11:15}px "JetBrains Mono","Fira Code",monospace`;ctx.fillStyle='#0af';ctx.fillText('All drives recovered. Data secured.',W/2,H/2+18);}
@@ -412,4 +544,5 @@ function drawHUD(ctx,W,H,g,ts,mob){const fs=mob?10:14,sf=mob?9:11,bH=mob?28:38;
     if(d<g.flashRadius+2){ctx.fillStyle=g.maze[gy][gx]===1?'rgba(25,35,55,0.8)':'rgba(12,16,25,0.5)';ctx.fillRect(mx+gx*ms,my+gy*ms,ms,ms);}}
   ctx.fillStyle='#0ff';ctx.fillRect(mx+g.player.x*ms-1,my+g.player.y*ms-1,ms+1,ms+1);
   for(const d of g.drives){if(d.collected)continue;if(Math.sqrt((d.x-g.player.x)**2+(d.y-g.player.y)**2)<g.flashRadius){ctx.fillStyle='#ffd700';ctx.fillRect(mx+d.x*ms,my+d.y*ms,ms,ms);}}
-  for(const bs of g.brokenServers){if(bs.fixed)continue;if(Math.sqrt((bs.x-g.player.x)**2+(bs.y-g.player.y)**2)<g.flashRadius){ctx.fillStyle='#f84';ctx.fillRect(mx+bs.x*ms,my+bs.y*ms,ms,ms);}}}
+  for(const bs of g.brokenServers){if(bs.fixed)continue;if(Math.sqrt((bs.x-g.player.x)**2+(bs.y-g.player.y)**2)<g.flashRadius){ctx.fillStyle=USB_COLORS[bs.colorIndex].hex;ctx.fillRect(mx+bs.x*ms,my+bs.y*ms,ms,ms);}}
+  for(const usb of g.usbSticks){if(usb.collected)continue;if(Math.sqrt((usb.x-g.player.x)**2+(usb.y-g.player.y)**2)<g.flashRadius){ctx.fillStyle=USB_COLORS[usb.colorIndex].hex;ctx.globalAlpha=0.6+Math.sin(ts/300)*0.3;ctx.fillRect(mx+usb.x*ms,my+usb.y*ms,ms,ms);ctx.globalAlpha=1;}}}
