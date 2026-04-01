@@ -65,15 +65,17 @@ export default function DataCenterMaze(){
       if(adj){const r=tR(x,y,42),type=types[Math.floor(r*types.length)],nL=2+Math.floor(tR(x,y,77)*4);
         servers.push({x,y,type,lights:Array.from({length:nL},(_,i)=>({color:['#00cc33','#cc2222','#0088cc','#cc8800','#cc00aa','#00ccaa'][Math.floor(tR(x,y,i*17)*6)],blink:0.3+tR(x,y,i*31)*4,offset:tR(x,y,i*53)*Math.PI*2,yPos:0.12+tR(x,y,i*71)*0.75,xPos:0.6+tR(x,y,i*91)*0.35}))})}}}
     const avoidList=[{x:1,y:1}];
-    const driveSpots=placeOnFloor(maze,NUM_DRIVES,avoidList);avoidList.push(...driveSpots);
-    const drives=driveSpots.map((s,i)=>({...s,code:Array.from({length:4},()=>Math.floor(Math.random()*10)),collected:false,id:i}));
     // Mechanic type: levels 1-5 = USB sticks, levels 6-8 = tools, levels 9-10 = tools + guards
     const useTools=level>=6;
-    // Broken server count: lvl1=4, lvl2=6, lvl3=8, lvl4=10, lvl5=12, lvl6=4, lvl7=8, lvl8=12, lvl9+=12
-    const brokenCount=level<=5?Math.min(12,4+(level-1)*2):level===6?4:level===7?8:12;
+    // Broken server count (always multiples of 4): lvl1=4, lvl2=8, lvl3=12, lvl4=16, lvl5=16, lvl6=4, lvl7=8, lvl8=12, lvl9+=12
+    const brokenCount=level<=5?Math.min(16,4*level):level===6?4:level===7?8:12;
+    const numDrives=brokenCount/4;
+    const driveSpots=placeOnFloor(maze,numDrives,avoidList);avoidList.push(...driveSpots);
+    const drives=driveSpots.map((s,i)=>({...s,code:Array.from({length:4},()=>Math.floor(Math.random()*10)),collected:false,id:i}));
     const levelColor=Math.floor(Math.random()*USB_COLORS.length);
     const brokenServers=[];
-    for(let bi=0;bi<brokenCount;bi++){const di=bi%NUM_DRIVES,fi=Math.floor(bi/NUM_DRIVES);
+    // 4 broken servers per drive, each holds one fragment (digit position 0-3)
+    for(let bi=0;bi<brokenCount;bi++){const di=bi%numDrives,fi=Math.floor(bi/numDrives);
       const spots=placeOnWall(maze,1,avoidList);if(spots.length===0)continue;
       spots.forEach(s=>avoidList.push({x:s.x,y:s.y},{x:s.adjX,y:s.adjY}));
       const pos=fi<FRAGS_PER?fi:Math.floor(Math.random()*FRAGS_PER);
@@ -97,7 +99,7 @@ export default function DataCenterMaze(){
     walkRef.current={x:1,y:1,moving:false,walkCycle:0};revealedRef.current=new Uint8Array(MW*MH);
     sparksRef.current=[];arcsRef.current=[];dustRef.current=[];notifRef.current={text:'',timer:0};setShowPhone(false);
     const p=toIso(1,1);camRef.current={x:p.x,y:p.y};
-    const g={maze,player,drives,brokenServers,servers,score:0,totalDrives:NUM_DRIVES,won:false,levelComplete:false,gameOver:false,gameOverReason:null,level,flashRadius:12,fragments:[],codeEntry:null,atDrive:null,usbSticks,tools,guards,usbInventory:[],collectedTools:[],atBrokenServer:null,cyberdeckEntry:null,levelColor,useTools,startTime:Date.now(),countdown,timeLeft:countdown};
+    const g={maze,player,drives,brokenServers,servers,score:0,totalDrives:numDrives,won:false,levelComplete:false,gameOver:false,gameOverReason:null,level,flashRadius:12,fragments:[],codeEntry:null,atDrive:null,usbSticks,tools,guards,usbInventory:[],collectedTools:[],atBrokenServer:null,cyberdeckEntry:null,levelColor,useTools,startTime:Date.now(),countdown,timeLeft:countdown};
     gRef.current=g;setGs({...g});
   },[]);
   useEffect(()=>{initGame();},[initGame]);
