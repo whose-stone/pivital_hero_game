@@ -506,40 +506,40 @@ function drawAgent(ctx,x,y,ts,player,walk){ctx.save();const f=player.facing;
   // ── HEAD ──
   const hx=x+dx*0.3;
   if(isBack){
-    // Back of head — more angular skull shape, covered in hair
-    ctx.beginPath();ctx.moveTo(hx-5,py+2);ctx.lineTo(hx-4.5,py-5);ctx.quadraticCurveTo(hx,py-8.5,hx+4.5,py-5);
-    ctx.lineTo(hx+5,py+2);ctx.quadraticCurveTo(hx+4,py+4,hx,py+4.5);ctx.quadraticCurveTo(hx-4,py+4,hx-5,py+2);ctx.closePath();
+    // Back of head — hair-covered, no face visible
+    // Skull shape
+    ctx.beginPath();ctx.moveTo(hx-4.5,py+2);ctx.quadraticCurveTo(hx-5,py-3,hx-3,py-6);
+    ctx.quadraticCurveTo(hx,py-8,hx+3,py-6);ctx.quadraticCurveTo(hx+5,py-3,hx+4.5,py+2);
+    ctx.quadraticCurveTo(hx,py+4,hx-4.5,py+2);ctx.closePath();
     ctx.fillStyle='#151210';ctx.fill();
-    // Hair texture lines
-    ctx.strokeStyle='#1e1a16';ctx.lineWidth=0.4;
-    for(let i=-3;i<=3;i+=1.5){ctx.beginPath();ctx.moveTo(hx+i,py-7);ctx.quadraticCurveTo(hx+i*1.1,py-2,hx+i*0.8,py+3);ctx.stroke();}
-    // Ear hint (barely visible from behind)
-    ctx.fillStyle='#a88868';ctx.beginPath();ctx.ellipse(hx-cf.lx*5.2,py-0.5,1.2,2.2,0,0,Math.PI*2);ctx.fill();
-    // Neck/hairline
-    ctx.beginPath();ctx.moveTo(hx-3,py+3.5);ctx.quadraticCurveTo(hx,py+5,hx+3,py+3.5);ctx.strokeStyle='#1a1612';ctx.lineWidth=0.6;ctx.stroke();
+    // Subtle hair part line
+    ctx.strokeStyle='#1e1a16';ctx.lineWidth=0.5;
+    ctx.beginPath();ctx.moveTo(hx,py-7.5);ctx.quadraticCurveTo(hx+0.5,py-3,hx,py+2);ctx.stroke();
+    // Neck hairline
+    ctx.strokeStyle='#1a1612';ctx.lineWidth=0.6;
+    ctx.beginPath();ctx.moveTo(hx-2.5,py+3);ctx.quadraticCurveTo(hx,py+4.5,hx+2.5,py+3);ctx.stroke();
+    // Ear tips peeking out (tight to head)
+    ctx.fillStyle='#a88868';
+    ctx.beginPath();ctx.ellipse(hx+4.8,py-0.5,0.8,1.8,0.15,0,Math.PI*2);ctx.fill();
+    ctx.beginPath();ctx.ellipse(hx-4.8,py-0.5,0.8,1.8,-0.15,0,Math.PI*2);ctx.fill();
   }else{
-    // Front/side view — angular jaw, defined features
-    // Skull shape — slightly taller than wide, with jawline
-    ctx.beginPath();ctx.moveTo(hx-5,py+1);ctx.lineTo(hx-4.8,py-4);ctx.quadraticCurveTo(hx,py-7.5,hx+4.8,py-4);
-    ctx.lineTo(hx+5,py+1);ctx.lineTo(hx+3.5,py+4);ctx.lineTo(hx+1,py+5);ctx.lineTo(hx-1,py+5);ctx.lineTo(hx-3.5,py+4);ctx.closePath();
+    // Front/side 3/4 view — compact, clean at small scale
+    // Face shape with jawline
+    ctx.beginPath();ctx.moveTo(hx-4.5,py);ctx.quadraticCurveTo(hx-5,py-4,hx-2,py-6.5);
+    ctx.quadraticCurveTo(hx,py-7.5,hx+2,py-6.5);ctx.quadraticCurveTo(hx+5,py-4,hx+4.5,py);
+    ctx.lineTo(hx+3,py+3);ctx.quadraticCurveTo(hx,py+4.5,hx-3,py+3);ctx.closePath();
     ctx.fillStyle='#b89878';ctx.fill();
-    // Hair (sits on top, angular)
-    ctx.beginPath();ctx.moveTo(hx-5.5,py-2);ctx.lineTo(hx-5.2,py-5);ctx.quadraticCurveTo(hx,py-9,hx+5.2,py-5);
-    ctx.lineTo(hx+5.5,py-2);ctx.lineTo(hx+4,py-3);ctx.quadraticCurveTo(hx,py-6,hx-4,py-3);ctx.closePath();
+    // Hair — short, swept to one side
+    ctx.beginPath();ctx.moveTo(hx-5,py-1.5);ctx.quadraticCurveTo(hx-5.2,py-5,hx-2,py-7);
+    ctx.quadraticCurveTo(hx,py-8,hx+2,py-7);ctx.quadraticCurveTo(hx+5.2,py-5,hx+5,py-1.5);
+    ctx.quadraticCurveTo(hx+3,py-3,hx,py-4.5);ctx.quadraticCurveTo(hx-3,py-3,hx-5,py-1.5);ctx.closePath();
     ctx.fillStyle='#151210';ctx.fill();
-    // Side hair
-    ctx.beginPath();ctx.ellipse(hx-cf.lx*1,py-1.5,1.5,3.5,0,0,Math.PI*2);ctx.fillStyle='#151210';ctx.fill();
-    // Ear
-    ctx.fillStyle='#a88868';ctx.beginPath();ctx.ellipse(hx-cf.lx*5,py-0.5,1.3,2.3,0,0,Math.PI*2);ctx.fill();
-    // Eye
-    ctx.fillStyle='#f8f8f0';ctx.beginPath();ctx.ellipse(hx+cf.lx*2,py-1.2,1.8,1,0,0,Math.PI*2);ctx.fill();
-    ctx.fillStyle='#12121a';ctx.beginPath();ctx.arc(hx+cf.lx*2.2,py-1.2,0.8,0,Math.PI*2);ctx.fill();
-    // Eyebrow
-    ctx.strokeStyle='#252018';ctx.lineWidth=0.8;ctx.beginPath();ctx.moveTo(hx+cf.lx*0.8,py-2.8);ctx.lineTo(hx+cf.lx*3.2,py-2.5);ctx.stroke();
-    // Nose
-    ctx.strokeStyle='#9a7858';ctx.lineWidth=0.6;ctx.beginPath();ctx.moveTo(hx+cf.lx*2,py-0.5);ctx.lineTo(hx+cf.lx*3,py+1);ctx.lineTo(hx+cf.lx*2,py+1.5);ctx.stroke();
-    // Mouth
-    ctx.strokeStyle='#8a6848';ctx.lineWidth=0.5;ctx.beginPath();ctx.moveTo(hx+cf.lx*0.5,py+2.8);ctx.lineTo(hx+cf.lx*2.5,py+2.5);ctx.stroke();}
+    // Ear (tight to head, on far side)
+    ctx.fillStyle='#a88868';ctx.beginPath();ctx.ellipse(hx-cf.lx*4.5,py-0.5,0.8,1.8,0,0,Math.PI*2);ctx.fill();
+    // Eye — single dark dot, reads clean at small size
+    ctx.fillStyle='#12121a';ctx.beginPath();ctx.arc(hx+cf.lx*1.8,py-1.5,1,0,Math.PI*2);ctx.fill();
+    // Nose hint
+    ctx.fillStyle='#a88060';ctx.beginPath();ctx.arc(hx+cf.lx*2.8,py+0.5,0.7,0,Math.PI*2);ctx.fill();}
 
   ctx.restore();}
 
