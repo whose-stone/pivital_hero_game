@@ -503,43 +503,24 @@ function drawAgent(ctx,x,y,ts,player,walk){ctx.save();const f=player.facing;
   // ── NECK ──
   ctx.fillStyle='#b09070';ctx.fillRect(x-1.5+dx*0.5,py+5,3,5);
 
-  // ── HEAD ──
+  // ── HEAD — no face, just proportional shape with hair ──
   const hx=x+dx*0.3;
+  // Skin-colored head shape (same for all directions)
+  ctx.beginPath();ctx.moveTo(hx-4.5,py+1);ctx.quadraticCurveTo(hx-5,py-3,hx-3,py-6);
+  ctx.quadraticCurveTo(hx,py-7.5,hx+3,py-6);ctx.quadraticCurveTo(hx+5,py-3,hx+4.5,py+1);
+  ctx.quadraticCurveTo(hx+3,py+3.5,hx,py+4);ctx.quadraticCurveTo(hx-3,py+3.5,hx-4.5,py+1);ctx.closePath();
+  ctx.fillStyle='#b89878';ctx.fill();
+  // Hair on top
+  ctx.beginPath();ctx.moveTo(hx-5,py-1);ctx.quadraticCurveTo(hx-5.2,py-4.5,hx-2.5,py-6.5);
+  ctx.quadraticCurveTo(hx,py-8,hx+2.5,py-6.5);ctx.quadraticCurveTo(hx+5.2,py-4.5,hx+5,py-1);
+  ctx.quadraticCurveTo(hx+3,py-2.5,hx,py-4);ctx.quadraticCurveTo(hx-3,py-2.5,hx-5,py-1);ctx.closePath();
+  ctx.fillStyle='#151210';ctx.fill();
   if(isBack){
-    // Back of head — hair-covered, no face visible
-    // Skull shape
-    ctx.beginPath();ctx.moveTo(hx-4.5,py+2);ctx.quadraticCurveTo(hx-5,py-3,hx-3,py-6);
-    ctx.quadraticCurveTo(hx,py-8,hx+3,py-6);ctx.quadraticCurveTo(hx+5,py-3,hx+4.5,py+2);
-    ctx.quadraticCurveTo(hx,py+4,hx-4.5,py+2);ctx.closePath();
-    ctx.fillStyle='#151210';ctx.fill();
-    // Subtle hair part line
-    ctx.strokeStyle='#1e1a16';ctx.lineWidth=0.5;
-    ctx.beginPath();ctx.moveTo(hx,py-7.5);ctx.quadraticCurveTo(hx+0.5,py-3,hx,py+2);ctx.stroke();
-    // Neck hairline
-    ctx.strokeStyle='#1a1612';ctx.lineWidth=0.6;
-    ctx.beginPath();ctx.moveTo(hx-2.5,py+3);ctx.quadraticCurveTo(hx,py+4.5,hx+2.5,py+3);ctx.stroke();
-    // Ear tips peeking out (tight to head)
-    ctx.fillStyle='#a88868';
-    ctx.beginPath();ctx.ellipse(hx+4.8,py-0.5,0.8,1.8,0.15,0,Math.PI*2);ctx.fill();
-    ctx.beginPath();ctx.ellipse(hx-4.8,py-0.5,0.8,1.8,-0.15,0,Math.PI*2);ctx.fill();
-  }else{
-    // Front/side 3/4 view — compact, clean at small scale
-    // Face shape with jawline
-    ctx.beginPath();ctx.moveTo(hx-4.5,py);ctx.quadraticCurveTo(hx-5,py-4,hx-2,py-6.5);
-    ctx.quadraticCurveTo(hx,py-7.5,hx+2,py-6.5);ctx.quadraticCurveTo(hx+5,py-4,hx+4.5,py);
-    ctx.lineTo(hx+3,py+3);ctx.quadraticCurveTo(hx,py+4.5,hx-3,py+3);ctx.closePath();
-    ctx.fillStyle='#b89878';ctx.fill();
-    // Hair — short, swept to one side
-    ctx.beginPath();ctx.moveTo(hx-5,py-1.5);ctx.quadraticCurveTo(hx-5.2,py-5,hx-2,py-7);
-    ctx.quadraticCurveTo(hx,py-8,hx+2,py-7);ctx.quadraticCurveTo(hx+5.2,py-5,hx+5,py-1.5);
-    ctx.quadraticCurveTo(hx+3,py-3,hx,py-4.5);ctx.quadraticCurveTo(hx-3,py-3,hx-5,py-1.5);ctx.closePath();
-    ctx.fillStyle='#151210';ctx.fill();
-    // Ear (tight to head, on far side)
-    ctx.fillStyle='#a88868';ctx.beginPath();ctx.ellipse(hx-cf.lx*4.5,py-0.5,0.8,1.8,0,0,Math.PI*2);ctx.fill();
-    // Eye — single dark dot, reads clean at small size
-    ctx.fillStyle='#12121a';ctx.beginPath();ctx.arc(hx+cf.lx*1.8,py-1.5,1,0,Math.PI*2);ctx.fill();
-    // Nose hint
-    ctx.fillStyle='#a88060';ctx.beginPath();ctx.arc(hx+cf.lx*2.8,py+0.5,0.7,0,Math.PI*2);ctx.fill();}
+    // Back view — hair covers most of head
+    ctx.beginPath();ctx.moveTo(hx-4.5,py+1);ctx.quadraticCurveTo(hx-5,py-3,hx-3,py-6);
+    ctx.quadraticCurveTo(hx,py-7.5,hx+3,py-6);ctx.quadraticCurveTo(hx+5,py-3,hx+4.5,py+1);
+    ctx.quadraticCurveTo(hx+3,py+2,hx,py+2.5);ctx.quadraticCurveTo(hx-3,py+2,hx-4.5,py+1);ctx.closePath();
+    ctx.fillStyle='#151210';ctx.fill();}
 
   ctx.restore();}
 
