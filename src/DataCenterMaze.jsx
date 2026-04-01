@@ -51,6 +51,10 @@ export default function DataCenterMaze(){
   const revealedRef=useRef(new Uint8Array(MW*MH));
   const notifRef=useRef({text:'',timer:0});const sparksRef=useRef([]);const arcsRef=useRef([]);const dustRef=useRef([]);
   const[showPhone,setShowPhone]=useState(false);
+  const[showScoreboard,setShowScoreboard]=useState(false);
+  const highScoresRef=useRef(null);
+  if(!highScoresRef.current){try{highScoresRef.current=JSON.parse(localStorage.getItem('dcb_scores'))||{overall:[],levels:{}};}catch(e){highScoresRef.current={overall:[],levels:{}};}}
+  const saveScores=()=>{try{localStorage.setItem('dcb_scores',JSON.stringify(highScoresRef.current));}catch(e){}};
   const isMobile=useIsMobile();
 
   useEffect(()=>{const r=()=>{const vw=window.innerWidth,vh=window.innerHeight;
@@ -95,11 +99,12 @@ export default function DataCenterMaze(){
           // Generate random patrol waypoints
           const patrolPts=placeOnFloor(maze,4,[gSpots[0]]);
           guards.push({x:gSpots[0].x,y:gSpots[0].y,walkPos:{x:gSpots[0].x,y:gSpots[0].y},dir:{x:0,y:1},patrol:[gSpots[0],...patrolPts],patrolIdx:0,moveTimer:0,sightRange,alertTimer:0});}}}
-    const countdown=180+(level-1)*30;
+    // Par time for scoring (seconds) — beating par gives bonus
+    const parTime=120+(level-1)*30;
     walkRef.current={x:1,y:1,moving:false,walkCycle:0};revealedRef.current=new Uint8Array(MW*MH);
     sparksRef.current=[];arcsRef.current=[];dustRef.current=[];notifRef.current={text:'',timer:0};setShowPhone(false);
     const p=toIso(1,1);camRef.current={x:p.x,y:p.y};
-    const g={maze,player,drives,brokenServers,servers,score:0,totalDrives:numDrives,won:false,levelComplete:false,gameOver:false,gameOverReason:null,level,flashRadius:12,fragments:[],codeEntry:null,atDrive:null,usbSticks,tools,guards,usbInventory:[],collectedTools:[],atBrokenServer:null,cyberdeckEntry:null,levelColor,useTools,startTime:Date.now(),countdown,timeLeft:countdown};
+    const g={maze,player,drives,brokenServers,servers,score:0,totalDrives:numDrives,won:false,levelComplete:false,gameOver:false,gameOverReason:null,level,flashRadius:12,fragments:[],codeEntry:null,atDrive:null,usbSticks,tools,guards,usbInventory:[],collectedTools:[],atBrokenServer:null,cyberdeckEntry:null,levelColor,useTools,startTime:Date.now(),parTime,elapsed:0,levelScore:0,showScoreEntry:false,scoreInitials:['A','A','A'],scoreCursor:0};
     gRef.current=g;setGs({...g});
   },[]);
   useEffect(()=>{initGame();},[initGame]);
@@ -108,7 +113,15 @@ export default function DataCenterMaze(){
 
   // Screen: ▲=NE(0,-1) ▼=SW(0,1) ◀=NW(-1,0) ▶=SE(1,0)
   const movePlayer=useCallback((dx,dy)=>{
-    const g=gRef.current;if(!g||g.won||g.levelComplete||g.gameOver)return;
+    const g=gRef.current;if(!g||g.won||g.gameOver)return;
+    // Score initials entry
+    if(g.levelComplete&&g.showScoreEntry){const chars='ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!?#';
+      if(dy===-1){const ci=chars.indexOf(g.scoreInitials[g.scoreCursor]);g.scoreInitials[g.scoreCursor]=chars[(ci+1)%chars.length];}
+      else if(dy===1){const ci=chars.indexOf(g.scoreInitials[g.scoreCursor]);g.scoreInitials[g.scoreCursor]=chars[(ci-1+chars.length)%chars.length];}
+      else if(dx===-1)g.scoreCursor=Math.max(0,g.scoreCursor-1);
+      else if(dx===1)g.scoreCursor=Math.min(2,g.scoreCursor+1);
+      setGs({...g});return;}
+    if(g.levelComplete)return;
     if(g.cyberdeckEntry)return;
     if(g.codeEntry){const ce=g.codeEntry;
       if(dy===-1)ce.digits[ce.cursor]=(ce.digits[ce.cursor]+1)%10;
@@ -160,10 +173,27 @@ export default function DataCenterMaze(){
       drive.collected=true;g.score++;g.codeEntry=null;g.atDrive=null;
       notifRef.current={text:`◆ DRIVE ${ce.driveId+1} RECOVERED ◆`,timer:180};
       const iso=toIso(drive.x,drive.y);for(let i=0;i<25;i++)particlesRef.current.push({x:iso.x,y:iso.y-20,vx:(Math.random()-0.5)*6,vy:-Math.random()*5-2,life:1,color:`hsl(${40+Math.random()*25},100%,${55+Math.random()*35}%)`});
-      if(g.score>=g.totalDrives){g.levelComplete=true;g.won=false;}setGs({...g});
+      if(g.score>=g.totalDrives){g.levelComplete=true;g.won=false;
+        g.elapsed=Math.floor((Date.now()-g.startTime)/1000);
+        // Score: base 1000*level + time bonus (par - elapsed, min 0) * 10 * level
+        const timeBonus=Math.max(0,g.parTime-g.elapsed);
+        g.levelScore=1000*g.level+timeBonus*10*g.level;
+        g.showScoreEntry=true;g.scoreInitials=['A','A','A'];g.scoreCursor=0;}setGs({...g});
     }else{notifRef.current={text:'ACCESS DENIED',timer:120};g.codeEntry=null;setGs({...g});}
   },[]);
   const cancelCode=useCallback(()=>{const g=gRef.current;if(g){g.codeEntry=null;g.cyberdeckEntry=null;setGs({...g});};},[]);
+
+  const submitScore=useCallback(()=>{
+    const g=gRef.current;if(!g||!g.showScoreEntry)return;
+    const initials=g.scoreInitials.join('');const entry={initials,score:g.levelScore,level:g.level,time:g.elapsed};
+    const hs=highScoresRef.current;
+    // Per-level scores
+    const lk=`lvl${g.level}`;if(!hs.levels[lk])hs.levels[lk]=[];
+    hs.levels[lk].push(entry);hs.levels[lk].sort((a,b)=>b.score-a.score);hs.levels[lk]=hs.levels[lk].slice(0,20);
+    // Overall scores
+    hs.overall.push(entry);hs.overall.sort((a,b)=>b.score-a.score);hs.overall=hs.overall.slice(0,20);
+    saveScores();g.showScoreEntry=false;setGs({...g});
+  },[]);
 
   const openCyberdeck=useCallback(()=>{
     const g=gRef.current;if(!g||g.atBrokenServer===null||g.cyberdeckEntry)return;
@@ -185,15 +215,16 @@ export default function DataCenterMaze(){
     if(['w','a','s','d','arrowup','arrowdown','arrowleft','arrowright','escape','enter','tab'].includes(k))e.preventDefault();
     if(k==='escape')cancelCode();
     if(k==='enter'){const g=gRef.current;if(!g)return;
-      if(g.levelComplete)startNextLevel();
+      if(g.levelComplete&&g.showScoreEntry)submitScore();
+      else if(g.levelComplete&&!g.showScoreEntry)startNextLevel();
       else if(g.gameOver)initGame(g.level);
       else if(g.codeEntry)submitCode();
       else if(g.cyberdeckEntry)return;
       else if(g.atDrive!==null)openCodeEntry();
       else if(g.atBrokenServer!==null)openCyberdeck();}
-    if(k==='tab')setShowPhone(p=>!p);};
+    if(k==='tab'){e.preventDefault();setShowScoreboard(p=>!p);}};
     const ku=(e)=>{keysRef.current.delete(e.key.toLowerCase());};
-    window.addEventListener('keydown',kd);window.addEventListener('keyup',ku);return()=>{window.removeEventListener('keydown',kd);window.removeEventListener('keyup',ku);};},[cancelCode,submitCode,openCodeEntry,openCyberdeck,startNextLevel,initGame]);
+    window.addEventListener('keydown',kd);window.addEventListener('keyup',ku);return()=>{window.removeEventListener('keydown',kd);window.removeEventListener('keyup',ku);};},[cancelCode,submitCode,submitScore,openCodeEntry,openCyberdeck,startNextLevel,initGame]);
 
   useEffect(()=>{if(!gs)return;let aid;
     const loop=(ts)=>{const g=gRef.current;if(!g){aid=requestAnimationFrame(loop);return;}
@@ -235,10 +266,9 @@ export default function DataCenterMaze(){
           const iso=toIso(bs.x,bs.y);for(let i=0;i<25;i++)particlesRef.current.push({x:iso.x,y:iso.y-30,vx:(Math.random()-0.5)*6,vy:-Math.random()*5-1,life:1,color:rcol.hex});
           g.cyberdeckEntry=null;g.atBrokenServer=null;}}
       if(notifRef.current.timer>0&&!(g.atDrive!==null&&!g.codeEntry)&&!(g.atBrokenServer!==null&&!g.cyberdeckEntry))notifRef.current.timer--;
-      // Countdown timer (pause during cyberdeck and when level complete/game over)
+      // Count-up timer (pause during cyberdeck and when level complete/game over)
       if(!g.levelComplete&&!g.gameOver&&!g.won&&!g.cyberdeckEntry){
-        g.timeLeft=Math.max(0,g.countdown-Math.floor((Date.now()-g.startTime)/1000));
-        if(g.timeLeft<=0){g.gameOver=true;g.gameOverReason='time';g.timeLeft=0;}}
+        g.elapsed=Math.floor((Date.now()-g.startTime)/1000);}
       // Guard AI
       for(const gd of g.guards){if(g.gameOver||g.levelComplete)break;
         gd.moveTimer++;
@@ -343,15 +373,49 @@ export default function DataCenterMaze(){
       <div style={{color:'#334',fontSize:9,marginTop:4,textAlign:'center'}}>Find {USB_COLORS[gs.levelColor].name} USB sticks to repair servers</div>
     </div>):null;
 
+  const hs=highScoresRef.current;
+  const scoreboardUI=showScoreboard?(
+    <div style={{position:'absolute',top:'50%',left:'50%',transform:'translate(-50%,-50%)',width:340,maxHeight:'80vh',overflow:'auto',background:'#0a0c12',border:'2px solid #ffd700',borderRadius:12,padding:16,boxShadow:'0 8px 40px rgba(0,0,0,0.9)',zIndex:20,fontFamily:'"JetBrains Mono",monospace'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+        <div style={{color:'#ffd700',fontSize:14,fontWeight:'bold'}}>HIGH SCORES</div>
+        <button onClick={()=>setShowScoreboard(false)} style={{background:'transparent',border:'1px solid #333',color:'#888',borderRadius:4,padding:'2px 8px',cursor:'pointer',fontFamily:'inherit',fontSize:10}}>✕</button>
+      </div>
+      <div style={{color:'#0af',fontSize:11,fontWeight:'bold',marginBottom:6}}>OVERALL TOP 20</div>
+      <div style={{borderTop:'1px solid #1a2040',marginBottom:12}}>
+        {(hs.overall.length===0)?<div style={{color:'#334',fontSize:10,padding:6}}>No scores yet</div>:
+        hs.overall.map((e,i)=>(
+          <div key={i} style={{display:'flex',justifyContent:'space-between',padding:'3px 4px',fontSize:10,color:i<3?'#ffd700':i<10?'#0af':'#556',borderBottom:'1px solid #111'}}>
+            <span>{String(i+1).padStart(2,' ')}. {e.initials}</span>
+            <span>LVL{e.level}</span>
+            <span>{Math.floor(e.time/60)}:{String(e.time%60).padStart(2,'0')}</span>
+            <span style={{fontWeight:'bold'}}>{e.score.toLocaleString()}</span>
+          </div>))}
+      </div>
+      {Object.keys(hs.levels).sort().map(lk=>(
+        <div key={lk}>
+          <div style={{color:'#f84',fontSize:10,fontWeight:'bold',marginBottom:4}}>LEVEL {lk.replace('lvl','')}</div>
+          <div style={{borderTop:'1px solid #1a2040',marginBottom:10}}>
+            {hs.levels[lk].slice(0,10).map((e,i)=>(
+              <div key={i} style={{display:'flex',justifyContent:'space-between',padding:'2px 4px',fontSize:9,color:i<3?'#ffd700':'#556',borderBottom:'1px solid #0a0a0a'}}>
+                <span>{i+1}. {e.initials}</span>
+                <span>{Math.floor(e.time/60)}:{String(e.time%60).padStart(2,'0')}</span>
+                <span style={{fontWeight:'bold'}}>{e.score.toLocaleString()}</span>
+              </div>))}
+          </div>
+        </div>))}
+    </div>):null;
+
   return (
     <div style={{position:'relative',width:'100vw',height:'100vh',background:'#000',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',fontFamily:'"JetBrains Mono","Fira Code",monospace',overflow:'hidden',touchAction:'none',userSelect:'none',WebkitUserSelect:'none'}}>
       <canvas ref={canvasRef} width={dims.w} height={dims.h} style={{border:'1px solid #111828',borderRadius:4,maxWidth:'100%',maxHeight:isMobile?'50vh':'calc(100vh - 70px)',touchAction:'none'}}/>
       {phoneUI}
+      {scoreboardUI}
       {isMobile?(
         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'4px 8px',width:'100%',boxSizing:'border-box'}}>
           <div style={{display:'flex',flexDirection:'column',gap:4,flex:1}}>
             <div style={{display:'flex',gap:5,flexWrap:'wrap'}}>
               <button onClick={()=>setShowPhone(p=>!p)} style={{background:'rgba(0,170,255,0.1)',color:'#0af',border:'1px solid rgba(0,170,255,0.3)',padding:'5px 10px',borderRadius:5,fontFamily:'inherit',fontSize:10,touchAction:'manipulation'}}>📱 Codes</button>
+              <button onClick={()=>setShowScoreboard(p=>!p)} style={{background:'rgba(255,215,0,0.1)',color:'#ffd700',border:'1px solid rgba(255,215,0,0.3)',padding:'5px 10px',borderRadius:5,fontFamily:'inherit',fontSize:10,touchAction:'manipulation'}}>🏆</button>
               {gs?.atDrive!==null&&!gs?.codeEntry&&<button onClick={openCodeEntry} style={{background:'#ffd700',color:'#000',border:'none',padding:'5px 12px',borderRadius:5,fontFamily:'inherit',fontWeight:'bold',fontSize:11,touchAction:'manipulation'}}>ACCESS DRIVE</button>}
               {gs?.atBrokenServer!==null&&!gs?.cyberdeckEntry&&<button onClick={openCyberdeck} style={{background:USB_COLORS[gs.levelColor].hex,color:'#000',border:'none',padding:'5px 12px',borderRadius:5,fontFamily:'inherit',fontWeight:'bold',fontSize:11,touchAction:'manipulation'}}>ACCESS SERVER</button>}
               {gs?.codeEntry&&<><button onClick={submitCode} style={{background:'#ffd700',color:'#000',border:'none',padding:'5px 12px',borderRadius:5,fontFamily:'inherit',fontWeight:'bold',fontSize:11,touchAction:'manipulation'}}>SUBMIT</button>
@@ -367,7 +431,8 @@ export default function DataCenterMaze(){
         <div style={{color:'#556',fontSize:12,marginTop:6,textAlign:'center',lineHeight:1.5}}>
           <span style={{color:'#0f0'}}>▲</span>=NE <span style={{color:'#0f0'}}>▼</span>=SW <span style={{color:'#0f0'}}>◀</span>=NW <span style={{color:'#0f0'}}>▶</span>=SE
           {gs?.codeEntry?' · ▲▼ digit · ◀▶ slot · Enter submit · Esc cancel':
-          ' · '}<span onClick={()=>setShowPhone(p=>!p)} style={{color:'#0af',cursor:'pointer',textDecoration:'underline'}}>Tab: Code Log</span>
+          ' · '}<span onClick={()=>setShowPhone(p=>!p)} style={{color:'#0af',cursor:'pointer',textDecoration:'underline'}}>Codes</span>
+          {' · '}<span onClick={()=>setShowScoreboard(p=>!p)} style={{color:'#ffd700',cursor:'pointer',textDecoration:'underline'}}>Tab: Scores</span>
           {' · '}<span onClick={()=>initGame(1)} style={{color:'#445',cursor:'pointer',textDecoration:'underline'}}>Restart</span>
           {gs?.levelComplete&&<span style={{display:'block',marginTop:4}}><button onClick={startNextLevel} style={{background:'#ffd700',color:'#000',border:'none',padding:'6px 16px',borderRadius:4,cursor:'pointer',fontFamily:'inherit',fontWeight:'bold',fontSize:13}}>Next Level</button></span>}
           {gs?.gameOver&&<span style={{display:'block',marginTop:4}}><button onClick={()=>initGame(gs.level)} style={{background:'#ff4444',color:'#fff',border:'none',padding:'6px 16px',borderRadius:4,cursor:'pointer',fontFamily:'inherit',fontWeight:'bold',fontSize:13}}>Retry Level</button></span>}
@@ -663,8 +728,9 @@ function drawBeam(ctx,px,py,player,g){ctx.save();const fd=player.dir;
 function drawHUD(ctx,W,H,g,ts,mob){const fs=mob?10:14,sf=mob?9:11,bH=mob?28:38;
   ctx.fillStyle='rgba(0,0,0,0.5)';ctx.fillRect(0,0,W,bH);ctx.fillStyle='rgba(0,170,255,0.06)';ctx.fillRect(0,bH-1,W,1);
   ctx.font=`bold ${fs}px "JetBrains Mono","Fira Code",monospace`;ctx.fillStyle='#0af';ctx.textAlign='left';ctx.fillText(`◆ DATACENTER BREACH — LVL ${g.level}`,10,bH*0.65);
-  // Countdown timer (center)
-  const mins=Math.floor(g.timeLeft/60),secs=g.timeLeft%60;const tCol=g.timeLeft<=30?'#ff4444':g.timeLeft<=60?'#ffaa00':'#556';
+  // Count-up timer (center)
+  const mins=Math.floor(g.elapsed/60),secs=g.elapsed%60;
+  const tCol=g.elapsed<g.parTime?'#22ff66':g.elapsed<g.parTime*1.5?'#ffaa00':'#ff4444';
   ctx.textAlign='center';ctx.font=`bold ${sf}px "JetBrains Mono","Fira Code",monospace`;ctx.fillStyle=tCol;ctx.fillText(`${mins}:${String(secs).padStart(2,'0')}`,W/2,bH*0.5);
   ctx.textAlign='right';ctx.fillStyle='#ffd700';let st='';for(let i=0;i<g.totalDrives;i++)st+=i<g.score?'◆ ':'◇ ';ctx.fillText(st,W-10,bH*0.65);
   ctx.font=`${sf}px "JetBrains Mono","Fira Code",monospace`;ctx.fillStyle='#556';ctx.fillText(`${g.score}/${g.totalDrives} DRIVES`,W-10,bH*0.35);
@@ -672,16 +738,32 @@ function drawHUD(ctx,W,H,g,ts,mob){const fs=mob?10:14,sf=mob?9:11,bH=mob?28:38;
   // USB inventory as colored dots
   const usbX=mob?90:120;let udx=usbX;
   for(const ci of g.usbInventory){ctx.fillStyle=USB_COLORS[ci].hex;ctx.beginPath();ctx.arc(udx,bH*0.35-1,3,0,Math.PI*2);ctx.fill();udx+=8;}
-  // Level complete screen
-  if(g.levelComplete){ctx.fillStyle='rgba(0,0,0,0.75)';ctx.fillRect(0,0,W,H);const p=0.8+Math.sin(ts/300)*0.2;ctx.textAlign='center';
-    ctx.font=`bold ${mob?20:32}px "JetBrains Mono","Fira Code",monospace`;ctx.fillStyle=`rgba(255,215,0,${p})`;ctx.fillText(`◆ LEVEL ${g.level} COMPLETE ◆`,W/2,H/2-40);
-    ctx.font=`${mob?11:15}px "JetBrains Mono","Fira Code",monospace`;ctx.fillStyle='#0af';
-    const elapsed=Math.floor((Date.now()-g.startTime)/1000);ctx.fillText(`Time: ${Math.floor(elapsed/60)}m ${elapsed%60}s · ${g.brokenServers.filter(b=>b.fixed).length} servers repaired`,W/2,H/2);
-    ctx.font=`bold ${mob?13:18}px "JetBrains Mono","Fira Code",monospace`;ctx.fillStyle='#ffd700';ctx.fillText('PRESS ENTER FOR NEXT LEVEL',W/2,H/2+35);}
+  // Level complete screen with score entry
+  if(g.levelComplete){ctx.fillStyle='rgba(0,0,0,0.82)';ctx.fillRect(0,0,W,H);const p=0.8+Math.sin(ts/300)*0.2;ctx.textAlign='center';
+    ctx.font=`bold ${mob?20:32}px "JetBrains Mono","Fira Code",monospace`;ctx.fillStyle=`rgba(255,215,0,${p})`;ctx.fillText(`◆ LEVEL ${g.level} COMPLETE ◆`,W/2,H/2-80);
+    ctx.font=`${mob?11:14}px "JetBrains Mono","Fira Code",monospace`;ctx.fillStyle='#0af';
+    ctx.fillText(`Time: ${Math.floor(g.elapsed/60)}m ${g.elapsed%60}s · ${g.brokenServers.filter(b=>b.fixed).length} servers repaired`,W/2,H/2-50);
+    // Score display
+    ctx.font=`bold ${mob?16:24}px "JetBrains Mono","Fira Code",monospace`;ctx.fillStyle='#ffd700';
+    ctx.fillText(`SCORE: ${g.levelScore.toLocaleString()}`,W/2,H/2-20);
+    const bonusT=Math.max(0,g.parTime-g.elapsed);
+    ctx.font=`${mob?9:11}px "JetBrains Mono","Fira Code",monospace`;ctx.fillStyle=bonusT>0?'#22ff66':'#ff4444';
+    ctx.fillText(bonusT>0?`${bonusT}s under par (+${bonusT*10*g.level} bonus)`:`${Math.abs(bonusT)}s over par (no time bonus)`,W/2,H/2+2);
+    // Initials entry
+    if(g.showScoreEntry){
+      ctx.font=`${mob?10:13}px "JetBrains Mono","Fira Code",monospace`;ctx.fillStyle='#888';ctx.fillText('ENTER YOUR INITIALS',W/2,H/2+28);
+      const iW=30,iG=8,iTotalW=iW*3+iG*2,iSX=W/2-iTotalW/2,iY=H/2+38;
+      for(let i=0;i<3;i++){const ix=iSX+i*(iW+iG),sel=i===g.scoreCursor;
+        ctx.fillStyle=sel?'rgba(255,215,0,0.15)':'rgba(20,25,35,0.8)';ctx.fillRect(ix,iY,iW,36);
+        ctx.strokeStyle=sel?'#ffd700':'#334';ctx.lineWidth=sel?2:1;ctx.strokeRect(ix,iY,iW,36);
+        ctx.font=`bold 22px "JetBrains Mono",monospace`;ctx.fillStyle=sel?'#ffd700':'#aab';ctx.fillText(g.scoreInitials[i],ix+iW/2,iY+22);
+        if(sel){ctx.font='10px monospace';ctx.fillStyle='#ffd700';ctx.fillText('▲',ix+iW/2,iY-6);ctx.fillText('▼',ix+iW/2,iY+44);}}
+      ctx.font=`bold ${mob?11:14}px "JetBrains Mono","Fira Code",monospace`;ctx.fillStyle='#ffd700';ctx.fillText('◀▶ move · ▲▼ change · ENTER submit',W/2,H/2+95);}
+    else{ctx.font=`bold ${mob?13:18}px "JetBrains Mono","Fira Code",monospace`;ctx.fillStyle='#ffd700';ctx.fillText('PRESS ENTER FOR NEXT LEVEL',W/2,H/2+50);}}
   // Game over screen
   if(g.gameOver){ctx.fillStyle='rgba(0,0,0,0.8)';ctx.fillRect(0,0,W,H);const p=0.7+Math.sin(ts/200)*0.3;ctx.textAlign='center';
     ctx.font=`bold ${mob?20:32}px "JetBrains Mono","Fira Code",monospace`;ctx.fillStyle=`rgba(255,68,68,${p})`;
-    ctx.fillText(g.gameOverReason==='guard'?'DETECTED BY SECURITY':'TIME EXPIRED',W/2,H/2-30);
+    ctx.fillText('DETECTED BY SECURITY',W/2,H/2-30);
     ctx.font=`${mob?11:15}px "JetBrains Mono","Fira Code",monospace`;ctx.fillStyle='#888';ctx.fillText(`Level ${g.level} · ${g.score}/${g.totalDrives} drives recovered`,W/2,H/2+5);
     ctx.font=`bold ${mob?12:16}px "JetBrains Mono","Fira Code",monospace`;ctx.fillStyle='#ff4444';ctx.fillText('PRESS ENTER TO RETRY',W/2,H/2+35);}
   // ── PALM PILOT MINIMAP DEVICE ──
