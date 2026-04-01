@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { submitScoreToFirebase, fetchTopScores, fetchLevelScores } from "./firebase";
 
 const TW=96,TH=48,MW=31,MH=31,WS=0.06,RH=60,NUM_DRIVES=4,FRAGS_PER=4;
 const USB_COLORS=[
@@ -52,9 +53,17 @@ export default function DataCenterMaze(){
   const notifRef=useRef({text:'',timer:0});const sparksRef=useRef([]);const arcsRef=useRef([]);const dustRef=useRef([]);
   const[showPhone,setShowPhone]=useState(false);
   const[showScoreboard,setShowScoreboard]=useState(false);
+  const[firebaseScores,setFirebaseScores]=useState({overall:[],levels:{}});
+  const[scoresLoading,setScoresLoading]=useState(false);
   const highScoresRef=useRef(null);
   if(!highScoresRef.current){try{highScoresRef.current=JSON.parse(localStorage.getItem('dcb_scores'))||{overall:[],levels:{}};}catch(e){highScoresRef.current={overall:[],levels:{}};}}
-  const saveScores=()=>{try{localStorage.setItem('dcb_scores',JSON.stringify(highScoresRef.current));}catch(e){}};
+  const saveScoresLocal=()=>{try{localStorage.setItem('dcb_scores',JSON.stringify(highScoresRef.current));}catch(e){}};
+  const refreshScores=useCallback(async()=>{setScoresLoading(true);
+    const overall=await fetchTopScores(20);
+    const lvlData={};for(let l=1;l<=10;l++){const ld=await fetchLevelScores(l,20);if(ld&&ld.length>0)lvlData[`lvl${l}`]=ld;}
+    if(overall)setFirebaseScores({overall,levels:lvlData});
+    setScoresLoading(false);},[]);
+  useEffect(()=>{refreshScores();},[refreshScores]);
   const isMobile=useIsMobile();
 
   useEffect(()=>{const r=()=>{const vw=window.innerWidth,vh=window.innerHeight;
@@ -183,17 +192,20 @@ export default function DataCenterMaze(){
   },[]);
   const cancelCode=useCallback(()=>{const g=gRef.current;if(g){g.codeEntry=null;g.cyberdeckEntry=null;setGs({...g});};},[]);
 
-  const submitScore=useCallback(()=>{
+  const submitScore=useCallback(async()=>{
     const g=gRef.current;if(!g||!g.showScoreEntry)return;
     const initials=g.scoreInitials.join('');const entry={initials,score:g.levelScore,level:g.level,time:g.elapsed};
+    // Save locally as fallback
     const hs=highScoresRef.current;
-    // Per-level scores
     const lk=`lvl${g.level}`;if(!hs.levels[lk])hs.levels[lk]=[];
     hs.levels[lk].push(entry);hs.levels[lk].sort((a,b)=>b.score-a.score);hs.levels[lk]=hs.levels[lk].slice(0,20);
-    // Overall scores
     hs.overall.push(entry);hs.overall.sort((a,b)=>b.score-a.score);hs.overall=hs.overall.slice(0,20);
-    saveScores();g.showScoreEntry=false;setGs({...g});
-  },[]);
+    saveScoresLocal();
+    // Submit to Firebase
+    await submitScoreToFirebase(entry);
+    refreshScores();
+    g.showScoreEntry=false;setGs({...g});
+  },[refreshScores]);
 
   const openCyberdeck=useCallback(()=>{
     const g=gRef.current;if(!g||g.atBrokenServer===null||g.cyberdeckEntry)return;
@@ -373,17 +385,20 @@ export default function DataCenterMaze(){
       <div style={{color:'#334',fontSize:9,marginTop:4,textAlign:'center'}}>Find {USB_COLORS[gs.levelColor].name} USB sticks to repair servers</div>
     </div>):null;
 
-  const hs=highScoresRef.current;
+  const fs=firebaseScores;
   const scoreboardUI=showScoreboard?(
-    <div style={{position:'absolute',top:'50%',left:'50%',transform:'translate(-50%,-50%)',width:340,maxHeight:'80vh',overflow:'auto',background:'#0a0c12',border:'2px solid #ffd700',borderRadius:12,padding:16,boxShadow:'0 8px 40px rgba(0,0,0,0.9)',zIndex:20,fontFamily:'"JetBrains Mono",monospace'}}>
+    <div style={{position:'absolute',top:'50%',left:'50%',transform:'translate(-50%,-50%)',width:360,maxHeight:'80vh',overflow:'auto',background:'#0a0c12',border:'2px solid #ffd700',borderRadius:12,padding:16,boxShadow:'0 8px 40px rgba(0,0,0,0.9)',zIndex:20,fontFamily:'"JetBrains Mono",monospace'}}>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
-        <div style={{color:'#ffd700',fontSize:14,fontWeight:'bold'}}>HIGH SCORES</div>
-        <button onClick={()=>setShowScoreboard(false)} style={{background:'transparent',border:'1px solid #333',color:'#888',borderRadius:4,padding:'2px 8px',cursor:'pointer',fontFamily:'inherit',fontSize:10}}>✕</button>
+        <div style={{color:'#ffd700',fontSize:14,fontWeight:'bold'}}>GLOBAL HIGH SCORES</div>
+        <div style={{display:'flex',gap:6}}>
+          <button onClick={refreshScores} style={{background:'transparent',border:'1px solid #334',color:scoresLoading?'#334':'#0af',borderRadius:4,padding:'2px 8px',cursor:'pointer',fontFamily:'inherit',fontSize:9}}>{scoresLoading?'...':'↻'}</button>
+          <button onClick={()=>setShowScoreboard(false)} style={{background:'transparent',border:'1px solid #333',color:'#888',borderRadius:4,padding:'2px 8px',cursor:'pointer',fontFamily:'inherit',fontSize:10}}>✕</button>
+        </div>
       </div>
       <div style={{color:'#0af',fontSize:11,fontWeight:'bold',marginBottom:6}}>OVERALL TOP 20</div>
       <div style={{borderTop:'1px solid #1a2040',marginBottom:12}}>
-        {(hs.overall.length===0)?<div style={{color:'#334',fontSize:10,padding:6}}>No scores yet</div>:
-        hs.overall.map((e,i)=>(
+        {(fs.overall.length===0)?<div style={{color:'#334',fontSize:10,padding:6}}>{scoresLoading?'Loading...':'No scores yet'}</div>:
+        fs.overall.map((e,i)=>(
           <div key={i} style={{display:'flex',justifyContent:'space-between',padding:'3px 4px',fontSize:10,color:i<3?'#ffd700':i<10?'#0af':'#556',borderBottom:'1px solid #111'}}>
             <span>{String(i+1).padStart(2,' ')}. {e.initials}</span>
             <span>LVL{e.level}</span>
@@ -391,11 +406,11 @@ export default function DataCenterMaze(){
             <span style={{fontWeight:'bold'}}>{e.score.toLocaleString()}</span>
           </div>))}
       </div>
-      {Object.keys(hs.levels).sort().map(lk=>(
+      {Object.keys(fs.levels).sort().map(lk=>(
         <div key={lk}>
           <div style={{color:'#f84',fontSize:10,fontWeight:'bold',marginBottom:4}}>LEVEL {lk.replace('lvl','')}</div>
           <div style={{borderTop:'1px solid #1a2040',marginBottom:10}}>
-            {hs.levels[lk].slice(0,10).map((e,i)=>(
+            {fs.levels[lk].slice(0,10).map((e,i)=>(
               <div key={i} style={{display:'flex',justifyContent:'space-between',padding:'2px 4px',fontSize:9,color:i<3?'#ffd700':'#556',borderBottom:'1px solid #0a0a0a'}}>
                 <span>{i+1}. {e.initials}</span>
                 <span>{Math.floor(e.time/60)}:{String(e.time%60).padStart(2,'0')}</span>
