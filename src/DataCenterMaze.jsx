@@ -303,8 +303,8 @@ function drawFloor(ctx,x,y,br,glowTs){const hw=TW/2,hh=TH/2;ctx.save();ctx.globa
   ctx.restore();}
 
 function drawUsbStick(ctx,x,y,colorIndex,ts,br){ctx.save();
-  const col=USB_COLORS[colorIndex];const bob=Math.sin(ts/400+colorIndex*1.5)*3;
-  const ux=x,uy=y-12+bob;ctx.globalAlpha=Math.min(1,br*2+0.15);
+  const col=USB_COLORS[colorIndex];const bob=Math.sin(ts/400+colorIndex*1.5)*4;
+  const ux=x,uy=y-RH+8+bob;ctx.globalAlpha=Math.min(1,br*2+0.15);
   // Glow
   ctx.shadowBlur=10;ctx.shadowColor=col.hex;
   // USB body (small isometric rectangle)
@@ -455,9 +455,9 @@ function drawCyberdeck(ctx,W,H,g){const cd=g.cyberdeckEntry;if(!cd)return;
 function drawAgent(ctx,x,y,ts,player,walk){ctx.save();const f=player.facing;
   const isM=walk.moving||Math.abs(walk.x-player.x)>0.05||Math.abs(walk.y-player.y)>0.05;
   const wP=isM?walk.walkCycle:0,stride=isM?Math.sin(wP):0,bob=isM?Math.abs(Math.sin(wP))*1.5:0;
-  // Character anchored at tile center (x,y). Feet near y, body extends up.
-  const footY=y-2; // slightly above tile center
-  const py=footY-40-bob*0.4; // head area ~42px above feet
+  const footY=y-2;
+  const py=footY-40-bob*0.4;
+  const isBack=f==='nw'||f==='ne';
   const fc={nw:{dx:-1,lx:-2,fx:-1,as:-1},ne:{dx:1,lx:2,fx:1,as:1},sw:{dx:-1,lx:-2,fx:-1,as:-1},se:{dx:1,lx:2,fx:1,as:1}};
   const cf=fc[f],dx=cf.dx;
 
@@ -466,25 +466,22 @@ function drawAgent(ctx,x,y,ts,player,walk){ctx.save();const f=player.facing;
 
   // ── LEGS ──
   const lL=stride*7,rL=-stride*7;ctx.lineCap='round';
-  // Back leg
   ctx.strokeStyle='#14171e';ctx.lineWidth=3.2;
   ctx.beginPath();ctx.moveTo(x+3+dx,py+28);ctx.quadraticCurveTo(x+3+dx-rL*0.2,py+34,x+3+dx-rL*0.4,footY+1);ctx.stroke();
   ctx.beginPath();ctx.ellipse(x+3+dx-rL*0.4,footY+2,3,1.3,0,0,Math.PI*2);ctx.fillStyle='#0a0a0e';ctx.fill();
-  // Front leg
   ctx.strokeStyle='#1a1e26';ctx.lineWidth=3.5;
   ctx.beginPath();ctx.moveTo(x-3+dx,py+28);ctx.quadraticCurveTo(x-3+dx-lL*0.2,py+34,x-3+dx-lL*0.4,footY+1);ctx.stroke();
   ctx.beginPath();ctx.ellipse(x-3+dx-lL*0.4,footY+2,3,1.3,0,0,Math.PI*2);ctx.fillStyle='#0c0c10';ctx.fill();
 
   // ── TORSO ──
   ctx.beginPath();ctx.moveTo(x-7+dx,py+10);ctx.lineTo(x-8+dx,py+28);ctx.lineTo(x+8+dx,py+28);ctx.lineTo(x+7+dx,py+10);ctx.closePath();ctx.fillStyle='#181c26';ctx.fill();
-  // Seam
   ctx.beginPath();ctx.moveTo(x+dx*0.5,py+10);ctx.lineTo(x+dx*0.5,py+28);ctx.strokeStyle='#10131a';ctx.lineWidth=0.6;ctx.stroke();
-  // Lapels
-  ctx.beginPath();ctx.moveTo(x-1.5+dx,py+10);ctx.lineTo(x+dx*0.5,py+15);ctx.lineTo(x+1.5+dx,py+10);ctx.strokeStyle='#222838';ctx.lineWidth=0.7;ctx.stroke();
-  // Tie
-  ctx.beginPath();ctx.moveTo(x+dx*0.5,py+11);ctx.lineTo(x-0.8+dx*0.5,py+24);ctx.lineTo(x+dx*0.5,py+25);ctx.lineTo(x+0.8+dx*0.5,py+24);ctx.closePath();ctx.fillStyle='#3a0e14';ctx.fill();
-  // Collar
-  ctx.beginPath();ctx.moveTo(x-2.5+dx,py+9);ctx.lineTo(x+dx*0.5,py+11);ctx.lineTo(x+2.5+dx,py+9);ctx.strokeStyle='#444e5c';ctx.lineWidth=0.8;ctx.stroke();
+  if(!isBack){
+    ctx.beginPath();ctx.moveTo(x-1.5+dx,py+10);ctx.lineTo(x+dx*0.5,py+15);ctx.lineTo(x+1.5+dx,py+10);ctx.strokeStyle='#222838';ctx.lineWidth=0.7;ctx.stroke();
+    ctx.beginPath();ctx.moveTo(x+dx*0.5,py+11);ctx.lineTo(x-0.8+dx*0.5,py+24);ctx.lineTo(x+dx*0.5,py+25);ctx.lineTo(x+0.8+dx*0.5,py+24);ctx.closePath();ctx.fillStyle='#3a0e14';ctx.fill();
+    ctx.beginPath();ctx.moveTo(x-2.5+dx,py+9);ctx.lineTo(x+dx*0.5,py+11);ctx.lineTo(x+2.5+dx,py+9);ctx.strokeStyle='#444e5c';ctx.lineWidth=0.8;ctx.stroke();}
+  else{
+    ctx.beginPath();ctx.moveTo(x+dx*0.5,py+10);ctx.lineTo(x+dx*0.5,py+28);ctx.strokeStyle='#10131a';ctx.lineWidth=0.8;ctx.stroke();}
 
   // ── FREE ARM ──
   const freeX=x-cf.as*6+dx,freeS=isM?stride*6.5:0;
@@ -499,7 +496,6 @@ function drawAgent(ctx,x,y,ts,player,walk){ctx.save();const f=player.facing;
   ctx.beginPath();ctx.moveTo(flX,py+11);ctx.lineTo(flX+cf.fx*2,py+18);ctx.stroke();
   ctx.lineWidth=2.4;ctx.beginPath();ctx.moveTo(flX+cf.fx*2,py+18);ctx.lineTo(flEX,flEY);ctx.stroke();
   ctx.beginPath();ctx.arc(flEX,flEY,1.8,0,Math.PI*2);ctx.fillStyle='#b09070';ctx.fill();
-  // Flashlight
   ctx.beginPath();ctx.moveTo(flEX,flEY);ctx.lineTo(flEX+cf.fx*8,flEY-1);ctx.strokeStyle='#48505a';ctx.lineWidth=3;ctx.lineCap='round';ctx.stroke();
   ctx.beginPath();ctx.arc(flEX+cf.fx*9,flEY-1.5,2.5,0,Math.PI*2);ctx.fillStyle='#383f48';ctx.fill();
   const flg=ctx.createRadialGradient(flEX+cf.fx*9,flEY-1.5,0,flEX+cf.fx*9,flEY-1.5,4);flg.addColorStop(0,'rgba(255,255,200,0.4)');flg.addColorStop(1,'transparent');ctx.fillStyle=flg;ctx.beginPath();ctx.arc(flEX+cf.fx*9,flEY-1.5,4,0,Math.PI*2);ctx.fill();
@@ -507,14 +503,43 @@ function drawAgent(ctx,x,y,ts,player,walk){ctx.save();const f=player.facing;
   // ── NECK ──
   ctx.fillStyle='#b09070';ctx.fillRect(x-1.5+dx*0.5,py+5,3,5);
 
-  // ── HEAD — clean oval, no protruding features ──
-  ctx.beginPath();ctx.ellipse(x+dx*0.3,py-1,5.5,6.5,0,0,Math.PI*2);ctx.fillStyle='#b89878';ctx.fill();
-  // Hair (sits on top half of head)
-  ctx.beginPath();ctx.ellipse(x+dx*0.3,py-4.5,5.8,4,0,Math.PI*0.92,Math.PI*2.08);ctx.fillStyle='#151210';ctx.fill();
-  // Side hair (small, flush to head)
-  ctx.beginPath();ctx.ellipse(x+dx*0.3-cf.lx*1,py-1,1.8,4,0,0,Math.PI*2);ctx.fillStyle='#151210';ctx.fill();
-  // Eye (small dot on the visible side)
-  ctx.beginPath();ctx.arc(x+dx*0.3+cf.lx*1.8,py-1,0.9,0,Math.PI*2);ctx.fillStyle='#12121a';ctx.fill();
+  // ── HEAD ──
+  const hx=x+dx*0.3;
+  if(isBack){
+    // Back of head — more angular skull shape, covered in hair
+    ctx.beginPath();ctx.moveTo(hx-5,py+2);ctx.lineTo(hx-4.5,py-5);ctx.quadraticCurveTo(hx,py-8.5,hx+4.5,py-5);
+    ctx.lineTo(hx+5,py+2);ctx.quadraticCurveTo(hx+4,py+4,hx,py+4.5);ctx.quadraticCurveTo(hx-4,py+4,hx-5,py+2);ctx.closePath();
+    ctx.fillStyle='#151210';ctx.fill();
+    // Hair texture lines
+    ctx.strokeStyle='#1e1a16';ctx.lineWidth=0.4;
+    for(let i=-3;i<=3;i+=1.5){ctx.beginPath();ctx.moveTo(hx+i,py-7);ctx.quadraticCurveTo(hx+i*1.1,py-2,hx+i*0.8,py+3);ctx.stroke();}
+    // Ear hint (barely visible from behind)
+    ctx.fillStyle='#a88868';ctx.beginPath();ctx.ellipse(hx-cf.lx*5.2,py-0.5,1.2,2.2,0,0,Math.PI*2);ctx.fill();
+    // Neck/hairline
+    ctx.beginPath();ctx.moveTo(hx-3,py+3.5);ctx.quadraticCurveTo(hx,py+5,hx+3,py+3.5);ctx.strokeStyle='#1a1612';ctx.lineWidth=0.6;ctx.stroke();
+  }else{
+    // Front/side view — angular jaw, defined features
+    // Skull shape — slightly taller than wide, with jawline
+    ctx.beginPath();ctx.moveTo(hx-5,py+1);ctx.lineTo(hx-4.8,py-4);ctx.quadraticCurveTo(hx,py-7.5,hx+4.8,py-4);
+    ctx.lineTo(hx+5,py+1);ctx.lineTo(hx+3.5,py+4);ctx.lineTo(hx+1,py+5);ctx.lineTo(hx-1,py+5);ctx.lineTo(hx-3.5,py+4);ctx.closePath();
+    ctx.fillStyle='#b89878';ctx.fill();
+    // Hair (sits on top, angular)
+    ctx.beginPath();ctx.moveTo(hx-5.5,py-2);ctx.lineTo(hx-5.2,py-5);ctx.quadraticCurveTo(hx,py-9,hx+5.2,py-5);
+    ctx.lineTo(hx+5.5,py-2);ctx.lineTo(hx+4,py-3);ctx.quadraticCurveTo(hx,py-6,hx-4,py-3);ctx.closePath();
+    ctx.fillStyle='#151210';ctx.fill();
+    // Side hair
+    ctx.beginPath();ctx.ellipse(hx-cf.lx*1,py-1.5,1.5,3.5,0,0,Math.PI*2);ctx.fillStyle='#151210';ctx.fill();
+    // Ear
+    ctx.fillStyle='#a88868';ctx.beginPath();ctx.ellipse(hx-cf.lx*5,py-0.5,1.3,2.3,0,0,Math.PI*2);ctx.fill();
+    // Eye
+    ctx.fillStyle='#f8f8f0';ctx.beginPath();ctx.ellipse(hx+cf.lx*2,py-1.2,1.8,1,0,0,Math.PI*2);ctx.fill();
+    ctx.fillStyle='#12121a';ctx.beginPath();ctx.arc(hx+cf.lx*2.2,py-1.2,0.8,0,Math.PI*2);ctx.fill();
+    // Eyebrow
+    ctx.strokeStyle='#252018';ctx.lineWidth=0.8;ctx.beginPath();ctx.moveTo(hx+cf.lx*0.8,py-2.8);ctx.lineTo(hx+cf.lx*3.2,py-2.5);ctx.stroke();
+    // Nose
+    ctx.strokeStyle='#9a7858';ctx.lineWidth=0.6;ctx.beginPath();ctx.moveTo(hx+cf.lx*2,py-0.5);ctx.lineTo(hx+cf.lx*3,py+1);ctx.lineTo(hx+cf.lx*2,py+1.5);ctx.stroke();
+    // Mouth
+    ctx.strokeStyle='#8a6848';ctx.lineWidth=0.5;ctx.beginPath();ctx.moveTo(hx+cf.lx*0.5,py+2.8);ctx.lineTo(hx+cf.lx*2.5,py+2.5);ctx.stroke();}
 
   ctx.restore();}
 
@@ -538,11 +563,47 @@ function drawHUD(ctx,W,H,g,ts,mob){const fs=mob?10:14,sf=mob?9:11,bH=mob?28:38;
   if(g.won){ctx.fillStyle='rgba(0,0,0,0.7)';ctx.fillRect(0,0,W,H);const p=0.8+Math.sin(ts/300)*0.2;ctx.textAlign='center';
     ctx.font=`bold ${mob?18:30}px "JetBrains Mono","Fira Code",monospace`;ctx.fillStyle=`rgba(255,215,0,${p})`;ctx.fillText('◆ MISSION COMPLETE ◆',W/2,H/2-20);
     ctx.font=`${mob?11:15}px "JetBrains Mono","Fira Code",monospace`;ctx.fillStyle='#0af';ctx.fillText('All drives recovered. Data secured.',W/2,H/2+18);}
-  const ms=mob?2:3,mx=10,my=H-MH*ms-10;ctx.fillStyle='rgba(0,0,0,0.45)';ctx.fillRect(mx-2,my-2,MW*ms+4,MH*ms+4);
-  ctx.strokeStyle='rgba(0,170,255,0.15)';ctx.lineWidth=0.5;ctx.strokeRect(mx-2,my-2,MW*ms+4,MH*ms+4);
+  // ── PALM PILOT MINIMAP DEVICE ──
+  const ms=mob?2:3,mapW=MW*ms,mapH=MH*ms;
+  const devPad=6,devR=8,headerH=16,footerH=10;
+  const devW=mapW+devPad*2+4,devH=mapH+devPad*2+headerH+footerH+4;
+  const devX=8,devY=H-devH-8;
+  const mx=devX+devPad+2,my=devY+devPad+headerH+2;
+  // Device body — rounded dark shell
+  ctx.fillStyle='#1a1c22';ctx.beginPath();
+  ctx.moveTo(devX+devR,devY);ctx.lineTo(devX+devW-devR,devY);ctx.quadraticCurveTo(devX+devW,devY,devX+devW,devY+devR);
+  ctx.lineTo(devX+devW,devY+devH-devR);ctx.quadraticCurveTo(devX+devW,devY+devH,devX+devW-devR,devY+devH);
+  ctx.lineTo(devX+devR,devY+devH);ctx.quadraticCurveTo(devX,devY+devH,devX,devY+devH-devR);
+  ctx.lineTo(devX,devY+devR);ctx.quadraticCurveTo(devX,devY,devX+devR,devY);ctx.closePath();ctx.fill();
+  // Device border
+  ctx.strokeStyle='#333842';ctx.lineWidth=1.5;ctx.stroke();
+  // Inner bezel highlight
+  ctx.strokeStyle='rgba(60,70,90,0.4)';ctx.lineWidth=0.5;
+  ctx.strokeRect(devX+2,devY+2,devW-4,devH-4);
+  // Screen inset
+  ctx.fillStyle='rgba(0,4,10,0.85)';ctx.fillRect(mx-2,my-2,mapW+4,mapH+4);
+  ctx.strokeStyle='rgba(0,80,120,0.2)';ctx.lineWidth=0.5;ctx.strokeRect(mx-2,my-2,mapW+4,mapH+4);
+  // Grid location text above radar
+  ctx.font=`bold ${mob?7:9}px "JetBrains Mono",monospace`;ctx.textAlign='center';ctx.fillStyle='#0af';
+  ctx.fillText(`GRID: ${g.player.x},${g.player.y}`,devX+devW/2,devY+headerH-2);
+  // Subtle header line
+  ctx.fillStyle='rgba(0,170,255,0.12)';ctx.fillRect(devX+devPad,devY+headerH,devW-devPad*2,1);
+  // Radar grid
   for(let gy=0;gy<MH;gy++)for(let gx=0;gx<MW;gx++){const d=Math.sqrt((gx-g.player.x)**2+(gy-g.player.y)**2);
-    if(d<g.flashRadius+2){ctx.fillStyle=g.maze[gy][gx]===1?'rgba(25,35,55,0.8)':'rgba(12,16,25,0.5)';ctx.fillRect(mx+gx*ms,my+gy*ms,ms,ms);}}
+    if(d<g.flashRadius+2){ctx.fillStyle=g.maze[gy][gx]===1?'rgba(25,35,55,0.8)':'rgba(8,12,20,0.5)';ctx.fillRect(mx+gx*ms,my+gy*ms,ms,ms);}}
+  // Radar sweep line
+  const sweepAng=ts/2000*Math.PI*2;const sweepLen=g.flashRadius*ms;
+  ctx.globalAlpha=0.08;ctx.strokeStyle='#0af';ctx.lineWidth=1;
+  ctx.beginPath();ctx.moveTo(mx+g.player.x*ms,my+g.player.y*ms);
+  ctx.lineTo(mx+g.player.x*ms+Math.cos(sweepAng)*sweepLen,my+g.player.y*ms+Math.sin(sweepAng)*sweepLen);ctx.stroke();ctx.globalAlpha=1;
+  // Player blip
   ctx.fillStyle='#0ff';ctx.fillRect(mx+g.player.x*ms-1,my+g.player.y*ms-1,ms+1,ms+1);
+  // Drives
   for(const d of g.drives){if(d.collected)continue;if(Math.sqrt((d.x-g.player.x)**2+(d.y-g.player.y)**2)<g.flashRadius){ctx.fillStyle='#ffd700';ctx.fillRect(mx+d.x*ms,my+d.y*ms,ms,ms);}}
+  // Broken servers
   for(const bs of g.brokenServers){if(bs.fixed)continue;if(Math.sqrt((bs.x-g.player.x)**2+(bs.y-g.player.y)**2)<g.flashRadius){ctx.fillStyle=USB_COLORS[bs.colorIndex].hex;ctx.fillRect(mx+bs.x*ms,my+bs.y*ms,ms,ms);}}
-  for(const usb of g.usbSticks){if(usb.collected)continue;if(Math.sqrt((usb.x-g.player.x)**2+(usb.y-g.player.y)**2)<g.flashRadius){ctx.fillStyle=USB_COLORS[usb.colorIndex].hex;ctx.globalAlpha=0.6+Math.sin(ts/300)*0.3;ctx.fillRect(mx+usb.x*ms,my+usb.y*ms,ms,ms);ctx.globalAlpha=1;}}}
+  // USB sticks
+  for(const usb of g.usbSticks){if(usb.collected)continue;if(Math.sqrt((usb.x-g.player.x)**2+(usb.y-g.player.y)**2)<g.flashRadius){ctx.fillStyle=USB_COLORS[usb.colorIndex].hex;ctx.globalAlpha=0.6+Math.sin(ts/300)*0.3;ctx.fillRect(mx+usb.x*ms,my+usb.y*ms,ms,ms);ctx.globalAlpha=1;}}
+  // Footer — device brand text
+  ctx.font=`${mob?5:6}px "JetBrains Mono",monospace`;ctx.textAlign='center';ctx.fillStyle='#2a2e38';
+  ctx.fillText('PIVITAL OS',devX+devW/2,devY+devH-3);}
