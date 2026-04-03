@@ -119,7 +119,7 @@ export default function DataCenterMaze(){
     const g={maze,player,drives,brokenServers,servers,score:0,totalDrives:numDrives,won:false,levelComplete:false,gameOver:false,gameOverReason:null,level,flashRadius:12,fragments:[],codeEntry:null,atDrive:null,usbSticks,tools,guards,usbInventory:[],collectedTools:[],atBrokenServer:null,cyberdeckEntry:null,levelColor,useTools,startTime:Date.now(),parTime,elapsed:0,levelScore:0,showScoreEntry:false,scoreInitials:['A','A','A'],scoreCursor:0};
     gRef.current=g;setGs({...g});
   },[]);
-  useEffect(()=>{if(!showSplash)initGame();},[initGame,showSplash]);
+  useEffect(()=>{if(!showSplash&&!gRef.current)initGame();},[initGame,showSplash]);
   // Splash screen animation
   useEffect(()=>{if(gamePhase!=='splash')return;let aid;
     const splashLoop=(ts)=>{const cv=canvasRef.current;if(!cv){aid=requestAnimationFrame(splashLoop);return;}
@@ -436,7 +436,7 @@ export default function DataCenterMaze(){
         </div>))}
     </div>):null;
 
-  const startFromSplash=(level=1)=>{setShowSplash(false);setShowLevelSelect(false);initGame(level);};
+  const startFromSplash=(level=1)=>{setShowSplash(false);setShowLevelSelect(false);setGamePhase('playing');initGame(level);};
 
   if(showSplash){return(
     <div style={{position:'relative',width:'100vw',height:'100vh',background:'#000',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',fontFamily:'"JetBrains Mono","Fira Code",monospace',overflow:'hidden',userSelect:'none',WebkitUserSelect:'none'}}>
