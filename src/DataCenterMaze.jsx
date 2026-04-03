@@ -52,6 +52,8 @@ export default function DataCenterMaze(){
   const notifRef=useRef({text:'',timer:0});const sparksRef=useRef([]);const arcsRef=useRef([]);const dustRef=useRef([]);
   const[showPhone,setShowPhone]=useState(false);
   const[showScoreboard,setShowScoreboard]=useState(false);
+  const[showSplash,setShowSplash]=useState(true);
+  const[showLevelSelect,setShowLevelSelect]=useState(false);
   const highScoresRef=useRef(null);
   if(!highScoresRef.current){try{highScoresRef.current=JSON.parse(localStorage.getItem('dcb_scores'))||{overall:[],levels:{}};}catch(e){highScoresRef.current={overall:[],levels:{}};}}
   const saveScores=()=>{try{localStorage.setItem('dcb_scores',JSON.stringify(highScoresRef.current));}catch(e){}};
@@ -107,7 +109,7 @@ export default function DataCenterMaze(){
     const g={maze,player,drives,brokenServers,servers,score:0,totalDrives:numDrives,won:false,levelComplete:false,gameOver:false,gameOverReason:null,level,flashRadius:12,fragments:[],codeEntry:null,atDrive:null,usbSticks,tools,guards,usbInventory:[],collectedTools:[],atBrokenServer:null,cyberdeckEntry:null,levelColor,useTools,startTime:Date.now(),parTime,elapsed:0,levelScore:0,showScoreEntry:false,scoreInitials:['A','A','A'],scoreCursor:0};
     gRef.current=g;setGs({...g});
   },[]);
-  useEffect(()=>{initGame();},[initGame]);
+  useEffect(()=>{if(!showSplash)initGame();},[initGame,showSplash]);
 
   const startNextLevel=useCallback(()=>{const g=gRef.current;if(g)initGame(g.level+1);},[initGame]);
 
@@ -404,6 +406,34 @@ export default function DataCenterMaze(){
           </div>
         </div>))}
     </div>):null;
+
+  const startFromSplash=(level=1)=>{setShowSplash(false);setShowLevelSelect(false);initGame(level);};
+
+  if(showSplash){return(
+    <div style={{position:'relative',width:'100vw',height:'100vh',background:'#000',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',fontFamily:'"JetBrains Mono","Fira Code",monospace',overflow:'hidden',userSelect:'none',WebkitUserSelect:'none'}}>
+      <div style={{textAlign:'center',maxWidth:500}}>
+        <div style={{fontSize:isMobile?28:48,fontWeight:'bold',color:'#0af',letterSpacing:2,marginBottom:8}}>DATACENTER</div>
+        <div style={{fontSize:isMobile?20:36,fontWeight:'bold',color:'#ffd700',letterSpacing:4,marginBottom:24}}>BREACH</div>
+        <div style={{color:'#556',fontSize:isMobile?10:13,marginBottom:40,lineHeight:1.6}}>
+          Infiltrate the data center. Recover the drives.<br/>Repair the servers. Escape undetected.
+        </div>
+        <button onClick={()=>startFromSplash(1)} style={{background:'linear-gradient(135deg,#0af,#07d)',color:'#fff',border:'none',padding:isMobile?'12px 32px':'16px 48px',borderRadius:8,fontSize:isMobile?16:20,fontWeight:'bold',fontFamily:'inherit',cursor:'pointer',letterSpacing:1,boxShadow:'0 0 20px rgba(0,170,255,0.3)'}}>
+          START MISSION
+        </button>
+        {showLevelSelect&&(
+          <div style={{marginTop:20,display:'flex',flexWrap:'wrap',gap:8,justifyContent:'center'}}>
+            {Array.from({length:10},(_,i)=>i+1).map(lv=>(
+              <button key={lv} onClick={()=>startFromSplash(lv)} style={{background:'rgba(0,170,255,0.08)',color:'#0af',border:'1px solid rgba(0,170,255,0.3)',padding:'6px 12px',borderRadius:4,fontSize:11,fontFamily:'inherit',cursor:'pointer',minWidth:36}}>
+                {lv}
+              </button>))}
+          </div>)}
+        <div style={{position:'absolute',bottom:16,left:0,right:0,textAlign:'center'}}>
+          <button onClick={()=>setShowLevelSelect(s=>!s)} style={{background:'none',border:'none',color:'#334',fontSize:9,fontFamily:'inherit',cursor:'pointer',padding:'4px 12px'}}>
+            {showLevelSelect?'▼ HIDE LEVELS':'▲ SELECT LEVEL'}
+          </button>
+        </div>
+      </div>
+    </div>);}
 
   return (
     <div style={{position:'relative',width:'100vw',height:'100vh',background:'#000',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',fontFamily:'"JetBrains Mono","Fira Code",monospace',overflow:'hidden',touchAction:'none',userSelect:'none',WebkitUserSelect:'none'}}>
