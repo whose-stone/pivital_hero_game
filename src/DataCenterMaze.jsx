@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { submitScoreToFirebase, fetchTopScores, fetchLevelScores } from "./firebase";
 
 const TW=96,TH=48,MW=31,MH=31,WS=0.06,RH=60,NUM_DRIVES=4,FRAGS_PER=4;
 const USB_COLORS=[
@@ -46,6 +47,7 @@ function CrossDPad({onMove,size}){const s=size||46,g=3;
 
 export default function DataCenterMaze(){
   const canvasRef=useRef(null);const[gs,setGs]=useState(null);const[dims,setDims]=useState({w:1400,h:850});
+  const[gamePhase,setGamePhase]=useState('splash');const splashStartRef=useRef(Date.now());
   const keysRef=useRef(new Set()),lastMoveRef=useRef(0),particlesRef=useRef([]),gRef=useRef(null);
   const walkRef=useRef({x:1,y:1,moving:false,walkCycle:0}),camRef=useRef({x:0,y:0});
   const revealedRef=useRef(new Uint8Array(MW*MH));
@@ -54,9 +56,17 @@ export default function DataCenterMaze(){
   const[showScoreboard,setShowScoreboard]=useState(false);
   const[showSplash,setShowSplash]=useState(true);
   const[showLevelSelect,setShowLevelSelect]=useState(false);
+  const[firebaseScores,setFirebaseScores]=useState({overall:[],levels:{}});
+  const[scoresLoading,setScoresLoading]=useState(false);
   const highScoresRef=useRef(null);
   if(!highScoresRef.current){try{highScoresRef.current=JSON.parse(localStorage.getItem('dcb_scores'))||{overall:[],levels:{}};}catch(e){highScoresRef.current={overall:[],levels:{}};}}
-  const saveScores=()=>{try{localStorage.setItem('dcb_scores',JSON.stringify(highScoresRef.current));}catch(e){}};
+  const saveScoresLocal=()=>{try{localStorage.setItem('dcb_scores',JSON.stringify(highScoresRef.current));}catch(e){}};
+  const refreshScores=useCallback(async()=>{setScoresLoading(true);
+    const overall=await fetchTopScores(20);
+    const lvlData={};for(let l=1;l<=10;l++){const ld=await fetchLevelScores(l,20);if(ld&&ld.length>0)lvlData[`lvl${l}`]=ld;}
+    if(overall)setFirebaseScores({overall,levels:lvlData});
+    setScoresLoading(false);},[]);
+  useEffect(()=>{refreshScores();},[refreshScores]);
   const isMobile=useIsMobile();
 
   useEffect(()=>{const r=()=>{const vw=window.innerWidth,vh=window.innerHeight;
@@ -110,6 +120,18 @@ export default function DataCenterMaze(){
     gRef.current=g;setGs({...g});
   },[]);
   useEffect(()=>{if(!showSplash)initGame();},[initGame,showSplash]);
+  // Splash screen animation
+  useEffect(()=>{if(gamePhase!=='splash')return;let aid;
+    const splashLoop=(ts)=>{const cv=canvasRef.current;if(!cv){aid=requestAnimationFrame(splashLoop);return;}
+      drawSplash(cv.getContext('2d'),cv.width,cv.height,ts,Date.now()-splashStartRef.current);
+      aid=requestAnimationFrame(splashLoop);};
+    aid=requestAnimationFrame(splashLoop);
+    // Also allow click/touch to dismiss
+    const dismiss=()=>{if(Date.now()-splashStartRef.current>1500)setGamePhase('playing');};
+    window.addEventListener('click',dismiss);window.addEventListener('touchstart',dismiss);
+    return()=>{cancelAnimationFrame(aid);window.removeEventListener('click',dismiss);window.removeEventListener('touchstart',dismiss);};
+  },[gamePhase]);
+  useEffect(()=>{if(gamePhase==='playing'&&!gRef.current)initGame();},[initGame,gamePhase]);
 
   const startNextLevel=useCallback(()=>{const g=gRef.current;if(g)initGame(g.level+1);},[initGame]);
 
@@ -185,17 +207,20 @@ export default function DataCenterMaze(){
   },[]);
   const cancelCode=useCallback(()=>{const g=gRef.current;if(g){g.codeEntry=null;g.cyberdeckEntry=null;setGs({...g});};},[]);
 
-  const submitScore=useCallback(()=>{
+  const submitScore=useCallback(async()=>{
     const g=gRef.current;if(!g||!g.showScoreEntry)return;
     const initials=g.scoreInitials.join('');const entry={initials,score:g.levelScore,level:g.level,time:g.elapsed};
+    // Save locally as fallback
     const hs=highScoresRef.current;
-    // Per-level scores
     const lk=`lvl${g.level}`;if(!hs.levels[lk])hs.levels[lk]=[];
     hs.levels[lk].push(entry);hs.levels[lk].sort((a,b)=>b.score-a.score);hs.levels[lk]=hs.levels[lk].slice(0,20);
-    // Overall scores
     hs.overall.push(entry);hs.overall.sort((a,b)=>b.score-a.score);hs.overall=hs.overall.slice(0,20);
-    saveScores();g.showScoreEntry=false;setGs({...g});
-  },[]);
+    saveScoresLocal();
+    // Submit to Firebase
+    await submitScoreToFirebase(entry);
+    refreshScores();
+    g.showScoreEntry=false;setGs({...g});
+  },[refreshScores]);
 
   const openCyberdeck=useCallback(()=>{
     const g=gRef.current;if(!g||g.atBrokenServer===null||g.cyberdeckEntry)return;
@@ -215,6 +240,7 @@ export default function DataCenterMaze(){
 
   useEffect(()=>{const kd=(e)=>{const k=e.key.toLowerCase();keysRef.current.add(k);
     if(['w','a','s','d','arrowup','arrowdown','arrowleft','arrowright','escape','enter','tab'].includes(k))e.preventDefault();
+    if(gamePhase==='splash'){if(Date.now()-splashStartRef.current>1500){setGamePhase('playing');}return;}
     if(k==='escape')cancelCode();
     if(k==='enter'){const g=gRef.current;if(!g)return;
       if(g.levelComplete&&g.showScoreEntry)submitScore();
@@ -226,7 +252,7 @@ export default function DataCenterMaze(){
       else if(g.atBrokenServer!==null)openCyberdeck();}
     if(k==='tab'){e.preventDefault();setShowScoreboard(p=>!p);}};
     const ku=(e)=>{keysRef.current.delete(e.key.toLowerCase());};
-    window.addEventListener('keydown',kd);window.addEventListener('keyup',ku);return()=>{window.removeEventListener('keydown',kd);window.removeEventListener('keyup',ku);};},[cancelCode,submitCode,submitScore,openCodeEntry,openCyberdeck,startNextLevel,initGame]);
+    window.addEventListener('keydown',kd);window.addEventListener('keyup',ku);return()=>{window.removeEventListener('keydown',kd);window.removeEventListener('keyup',ku);};},[cancelCode,submitCode,submitScore,openCodeEntry,openCyberdeck,startNextLevel,initGame,gamePhase]);
 
   useEffect(()=>{if(!gs)return;let aid;
     const loop=(ts)=>{const g=gRef.current;if(!g){aid=requestAnimationFrame(loop);return;}
@@ -375,17 +401,20 @@ export default function DataCenterMaze(){
       <div style={{color:'#334',fontSize:9,marginTop:4,textAlign:'center'}}>Find {USB_COLORS[gs.levelColor].name} USB sticks to repair servers</div>
     </div>):null;
 
-  const hs=highScoresRef.current;
+  const fs=firebaseScores;
   const scoreboardUI=showScoreboard?(
-    <div style={{position:'absolute',top:'50%',left:'50%',transform:'translate(-50%,-50%)',width:340,maxHeight:'80vh',overflow:'auto',background:'#0a0c12',border:'2px solid #ffd700',borderRadius:12,padding:16,boxShadow:'0 8px 40px rgba(0,0,0,0.9)',zIndex:20,fontFamily:'"JetBrains Mono",monospace'}}>
+    <div style={{position:'absolute',top:'50%',left:'50%',transform:'translate(-50%,-50%)',width:360,maxHeight:'80vh',overflow:'auto',background:'#0a0c12',border:'2px solid #ffd700',borderRadius:12,padding:16,boxShadow:'0 8px 40px rgba(0,0,0,0.9)',zIndex:20,fontFamily:'"JetBrains Mono",monospace'}}>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
-        <div style={{color:'#ffd700',fontSize:14,fontWeight:'bold'}}>HIGH SCORES</div>
-        <button onClick={()=>setShowScoreboard(false)} style={{background:'transparent',border:'1px solid #333',color:'#888',borderRadius:4,padding:'2px 8px',cursor:'pointer',fontFamily:'inherit',fontSize:10}}>✕</button>
+        <div style={{color:'#ffd700',fontSize:14,fontWeight:'bold'}}>GLOBAL HIGH SCORES</div>
+        <div style={{display:'flex',gap:6}}>
+          <button onClick={refreshScores} style={{background:'transparent',border:'1px solid #334',color:scoresLoading?'#334':'#0af',borderRadius:4,padding:'2px 8px',cursor:'pointer',fontFamily:'inherit',fontSize:9}}>{scoresLoading?'...':'↻'}</button>
+          <button onClick={()=>setShowScoreboard(false)} style={{background:'transparent',border:'1px solid #333',color:'#888',borderRadius:4,padding:'2px 8px',cursor:'pointer',fontFamily:'inherit',fontSize:10}}>✕</button>
+        </div>
       </div>
       <div style={{color:'#0af',fontSize:11,fontWeight:'bold',marginBottom:6}}>OVERALL TOP 20</div>
       <div style={{borderTop:'1px solid #1a2040',marginBottom:12}}>
-        {(hs.overall.length===0)?<div style={{color:'#334',fontSize:10,padding:6}}>No scores yet</div>:
-        hs.overall.map((e,i)=>(
+        {(fs.overall.length===0)?<div style={{color:'#334',fontSize:10,padding:6}}>{scoresLoading?'Loading...':'No scores yet'}</div>:
+        fs.overall.map((e,i)=>(
           <div key={i} style={{display:'flex',justifyContent:'space-between',padding:'3px 4px',fontSize:10,color:i<3?'#ffd700':i<10?'#0af':'#556',borderBottom:'1px solid #111'}}>
             <span>{String(i+1).padStart(2,' ')}. {e.initials}</span>
             <span>LVL{e.level}</span>
@@ -393,11 +422,11 @@ export default function DataCenterMaze(){
             <span style={{fontWeight:'bold'}}>{e.score.toLocaleString()}</span>
           </div>))}
       </div>
-      {Object.keys(hs.levels).sort().map(lk=>(
+      {Object.keys(fs.levels).sort().map(lk=>(
         <div key={lk}>
           <div style={{color:'#f84',fontSize:10,fontWeight:'bold',marginBottom:4}}>LEVEL {lk.replace('lvl','')}</div>
           <div style={{borderTop:'1px solid #1a2040',marginBottom:10}}>
-            {hs.levels[lk].slice(0,10).map((e,i)=>(
+            {fs.levels[lk].slice(0,10).map((e,i)=>(
               <div key={i} style={{display:'flex',justifyContent:'space-between',padding:'2px 4px',fontSize:9,color:i<3?'#ffd700':'#556',borderBottom:'1px solid #0a0a0a'}}>
                 <span>{i+1}. {e.initials}</span>
                 <span>{Math.floor(e.time/60)}:{String(e.time%60).padStart(2,'0')}</span>
@@ -471,6 +500,86 @@ export default function DataCenterMaze(){
     </div>
   );
 }
+
+/* ===== SPLASH SCREEN ===== */
+function drawSplash(ctx,W,H,ts,elapsed){
+  ctx.fillStyle='#000';ctx.fillRect(0,0,W,H);
+  const cx=W/2,cy=H/2;const t=elapsed/1000;
+  // Scanlines
+  ctx.globalAlpha=0.04;ctx.fillStyle='#0af';for(let i=0;i<H;i+=3)ctx.fillRect(0,i,W,1);ctx.globalAlpha=1;
+
+  // Phase 1: DOS boot text (0-1.5s)
+  if(t<4){
+    const bootLines=['C:\\> BIOS CHECK... OK','C:\\> LOADING MAINFRAME OS v3.1','C:\\> INITIALIZING NETWORK STACK...','C:\\> MOUNTING /dev/datacenter','C:\\> WARNING: SECURITY BREACH DETECTED','C:\\> LAUNCHING RECOVERY PROTOCOL...','','C:\\> DATACENTER DISASTER v1.0'];
+    ctx.font='13px "JetBrains Mono","Courier New",monospace';ctx.textAlign='left';
+    const lineH=20,startY=40;
+    for(let i=0;i<bootLines.length;i++){const lineT=t-i*0.18;if(lineT<0)break;
+      const chars=Math.min(bootLines[i].length,Math.floor(lineT*40));
+      ctx.fillStyle=bootLines[i].includes('WARNING')?'#ff4444':bootLines[i].includes('DATACENTER')?'#ffd700':'#0f0';
+      ctx.fillText(bootLines[i].substring(0,chars),30,startY+i*lineH);
+      // Blinking cursor on current line
+      if(chars<bootLines[i].length&&Math.sin(ts/150)>0){ctx.fillStyle='#0f0';ctx.fillRect(30+chars*7.8,startY+i*lineH-12,8,14);}}
+    // Loading bar
+    if(t>1){const barW=W-80,barH=12,barX=40,barY=startY+bootLines.length*lineH+20;
+      const prog=Math.min(1,(t-1)/2.5);
+      ctx.fillStyle='#111';ctx.fillRect(barX,barY,barW,barH);
+      ctx.fillStyle='#0f0';ctx.fillRect(barX+1,barY+1,(barW-2)*prog,barH-2);
+      ctx.font='9px "JetBrains Mono",monospace';ctx.fillStyle='#0f0';ctx.fillText(`${Math.floor(prog*100)}%`,barX+barW+8,barY+10);}}
+
+  // Phase 2: Title card (fades in from 2s)
+  if(t>2){const fadeIn=Math.min(1,(t-2)/0.8);ctx.globalAlpha=fadeIn;
+    // Dark overlay to cover boot text
+    ctx.fillStyle=`rgba(0,0,0,${fadeIn*0.9})`;ctx.fillRect(0,0,W,H);
+
+    // Server rack silhouettes in background
+    const rackW=40,rackH=120,gap=20,numRacks=Math.floor(W/(rackW+gap));
+    for(let i=0;i<numRacks;i++){const rx=i*(rackW+gap)+gap/2,ry=cy+30;
+      // Rack body
+      ctx.fillStyle=`rgba(15,18,28,${0.6+Math.sin(ts/1000+i)*0.15})`;ctx.fillRect(rx,ry-rackH,rackW,rackH);
+      ctx.strokeStyle='rgba(30,40,60,0.5)';ctx.lineWidth=0.5;ctx.strokeRect(rx,ry-rackH,rackW,rackH);
+      // Rack slots
+      for(let s=0;s<6;s++){const sy=ry-rackH+8+s*(rackH/6);ctx.fillStyle='rgba(20,25,40,0.8)';ctx.fillRect(rx+3,sy,rackW-6,rackH/6-4);
+        // Blinking LEDs
+        for(let l=0;l<3;l++){const on=Math.sin(ts/300+i*2+s*1.5+l*3)>0.3;
+          ctx.fillStyle=on?(['#00ff44','#ff2244','#0088ff','#ffaa00'][(i+s+l)%4]):'#111';
+          ctx.beginPath();ctx.arc(rx+rackW-8+l*3,sy+5,1.2,0,Math.PI*2);ctx.fill();}}}
+    // Spark effects on random racks
+    for(let sp=0;sp<3;sp++){const sx=((Math.sin(ts/400+sp*7)*0.5+0.5)*W*0.8)+W*0.1;
+      const sy=cy-50-Math.random()*40;ctx.fillStyle=`rgba(255,${150+Math.floor(Math.random()*100)},0,${0.3+Math.random()*0.4})`;
+      ctx.beginPath();ctx.arc(sx,sy,1+Math.random()*2,0,Math.PI*2);ctx.fill();}
+
+    // Title: DATACENTER
+    ctx.font=`bold ${Math.min(60,W*0.07)}px "JetBrains Mono","Fira Code",monospace`;ctx.textAlign='center';ctx.textBaseline='middle';
+    // Glow effect
+    ctx.shadowBlur=20;ctx.shadowColor='#0af';ctx.fillStyle='#0af';ctx.fillText('DATACENTER',cx,cy-70);
+    ctx.shadowBlur=0;
+    // Title: DISASTER
+    ctx.font=`bold ${Math.min(72,W*0.085)}px "JetBrains Mono","Fira Code",monospace`;
+    ctx.shadowBlur=25;ctx.shadowColor='#ff2244';ctx.fillStyle='#ff2244';ctx.fillText('DISASTER',cx,cy-20);
+    ctx.shadowBlur=0;
+    // Subtitle
+    ctx.font=`${Math.min(14,W*0.018)}px "JetBrains Mono",monospace`;ctx.fillStyle='#556';
+    ctx.fillText('A PIVITAL SYSTEMS GAME',cx,cy+15);
+
+    // Electrical arc across title
+    if(Math.sin(ts/500)>0.7){ctx.strokeStyle='rgba(0,170,255,0.6)';ctx.lineWidth=1.5;ctx.shadowBlur=8;ctx.shadowColor='#0af';
+      ctx.beginPath();let ax=cx-120,ay=cy-45;ctx.moveTo(ax,ay);
+      for(let i=0;i<6;i++){ax+=40+Math.random()*10;ay=cy-45+(Math.random()-0.5)*30;ctx.lineTo(ax,ay);}ctx.stroke();ctx.shadowBlur=0;}
+
+    // "PRESS ANY KEY" blink (after 3s)
+    if(t>3.5){const blink=Math.sin(ts/400)>0?1:0.2;ctx.globalAlpha=blink*fadeIn;
+      ctx.font=`bold ${Math.min(18,W*0.025)}px "JetBrains Mono",monospace`;ctx.fillStyle='#ffd700';
+      ctx.fillText('PRESS ANY KEY TO START',cx,cy+60);
+      ctx.globalAlpha=fadeIn;}
+
+    // Copyright / version
+    ctx.font=`${Math.min(10,W*0.013)}px "JetBrains Mono",monospace`;ctx.fillStyle='#334';
+    ctx.fillText('2026 PIVITAL SYSTEMS',cx,H-20);
+    ctx.globalAlpha=1;}
+
+  // CRT vignette
+  const vg=ctx.createRadialGradient(cx,cy,W*0.25,cx,cy,Math.max(W,H)*0.6);
+  vg.addColorStop(0,'rgba(0,0,0,0)');vg.addColorStop(0.8,'rgba(0,0,0,0.15)');vg.addColorStop(1,'rgba(0,0,0,0.6)');ctx.fillStyle=vg;ctx.fillRect(0,0,W,H);}
 
 /* ===== FLOOR ===== */
 function drawFloor(ctx,x,y,br,glowTs,gx,gy){const hw=TW/2,hh=TH/2;ctx.save();ctx.globalAlpha=1;
@@ -648,72 +757,96 @@ function drawCyberdeck(ctx,W,H,g){const cd=g.cyberdeckEntry;if(!cd)return;
 /* ===== AGENT — taller, centered, clean head ===== */
 function drawAgent(ctx,x,y,ts,player,walk){ctx.save();const f=player.facing;
   const isM=walk.moving||Math.abs(walk.x-player.x)>0.05||Math.abs(walk.y-player.y)>0.05;
-  const wP=isM?walk.walkCycle:0,stride=isM?Math.sin(wP):0,bob=isM?Math.abs(Math.sin(wP))*1.5:0;
-  const footY=y-2;
-  const py=footY-40-bob*0.4;
+  const wP=isM?walk.walkCycle:0,stride=isM?Math.sin(wP):0,bob=isM?Math.abs(Math.sin(wP))*1.2:0;
   const isBack=f==='nw'||f==='ne';
-  const fc={nw:{dx:-1,lx:-2,fx:-1,as:-1},ne:{dx:1,lx:2,fx:1,as:1},sw:{dx:-1,lx:-2,fx:-1,as:-1},se:{dx:1,lx:2,fx:1,as:1}};
+  const fc={nw:{dx:-1,fx:-1,as:-1},ne:{dx:1,fx:1,as:1},sw:{dx:-1,fx:-1,as:-1},se:{dx:1,fx:1,as:1}};
   const cf=fc[f],dx=cf.dx;
+  // Realistic proportions: ~52px total. Head=7, neck=2, torso=16, legs=27
+  const footY=y-2;
+  const hipY=footY-27-bob*0.3;   // hips — legs are 27px
+  const shouldY=hipY-16;          // shoulders — torso is 16px
+  const neckY=shouldY-2;          // neck
+  const headY=neckY-3;            // head center
 
   // Shadow
-  ctx.beginPath();ctx.ellipse(x,footY+4,11,5,0,0,Math.PI*2);ctx.fillStyle='rgba(0,0,0,0.2)';ctx.fill();
+  ctx.beginPath();ctx.ellipse(x,footY+4,10,4,0,0,Math.PI*2);ctx.fillStyle='rgba(0,0,0,0.2)';ctx.fill();
 
-  // ── LEGS ──
-  const lL=stride*7,rL=-stride*7;ctx.lineCap='round';
-  ctx.strokeStyle='#14171e';ctx.lineWidth=3.2;
-  ctx.beginPath();ctx.moveTo(x+3+dx,py+28);ctx.quadraticCurveTo(x+3+dx-rL*0.2,py+34,x+3+dx-rL*0.4,footY+1);ctx.stroke();
-  ctx.beginPath();ctx.ellipse(x+3+dx-rL*0.4,footY+2,3,1.3,0,0,Math.PI*2);ctx.fillStyle='#0a0a0e';ctx.fill();
-  ctx.strokeStyle='#1a1e26';ctx.lineWidth=3.5;
-  ctx.beginPath();ctx.moveTo(x-3+dx,py+28);ctx.quadraticCurveTo(x-3+dx-lL*0.2,py+34,x-3+dx-lL*0.4,footY+1);ctx.stroke();
-  ctx.beginPath();ctx.ellipse(x-3+dx-lL*0.4,footY+2,3,1.3,0,0,Math.PI*2);ctx.fillStyle='#0c0c10';ctx.fill();
+  // ── LEGS (27px, split: thigh 14 + shin 13) ──
+  const lL=stride*8,rL=-stride*8;ctx.lineCap='round';
+  const kneeOff=14;
+  // Back leg (thigh + shin)
+  ctx.strokeStyle='#14171e';ctx.lineWidth=2.8;
+  const bkX=x+2.5+dx,bkKneeX=bkX-rL*0.25,bkKneeY=hipY+kneeOff,bkFootX=bkX-rL*0.4;
+  ctx.beginPath();ctx.moveTo(bkX,hipY);ctx.quadraticCurveTo(bkKneeX+rL*0.1,bkKneeY-2,bkKneeX,bkKneeY);ctx.stroke();
+  ctx.strokeStyle='#12151c';ctx.lineWidth=2.6;
+  ctx.beginPath();ctx.moveTo(bkKneeX,bkKneeY);ctx.quadraticCurveTo(bkKneeX-rL*0.1,bkKneeY+7,bkFootX,footY);ctx.stroke();
+  ctx.beginPath();ctx.ellipse(bkFootX,footY+1.5,3,1.2,0,0,Math.PI*2);ctx.fillStyle='#0a0a0e';ctx.fill();
+  // Front leg
+  ctx.strokeStyle='#1a1e26';ctx.lineWidth=3;
+  const frX=x-2.5+dx,frKneeX=frX-lL*0.25,frKneeY=hipY+kneeOff,frFootX=frX-lL*0.4;
+  ctx.beginPath();ctx.moveTo(frX,hipY);ctx.quadraticCurveTo(frKneeX+lL*0.1,frKneeY-2,frKneeX,frKneeY);ctx.stroke();
+  ctx.strokeStyle='#181c24';ctx.lineWidth=2.8;
+  ctx.beginPath();ctx.moveTo(frKneeX,frKneeY);ctx.quadraticCurveTo(frKneeX-lL*0.1,frKneeY+7,frFootX,footY);ctx.stroke();
+  ctx.beginPath();ctx.ellipse(frFootX,footY+1.5,3,1.2,0,0,Math.PI*2);ctx.fillStyle='#0c0c10';ctx.fill();
 
-  // ── TORSO ──
-  ctx.beginPath();ctx.moveTo(x-7+dx,py+10);ctx.lineTo(x-8+dx,py+28);ctx.lineTo(x+8+dx,py+28);ctx.lineTo(x+7+dx,py+10);ctx.closePath();ctx.fillStyle='#181c26';ctx.fill();
-  ctx.beginPath();ctx.moveTo(x+dx*0.5,py+10);ctx.lineTo(x+dx*0.5,py+28);ctx.strokeStyle='#10131a';ctx.lineWidth=0.6;ctx.stroke();
+  // ── TORSO (16px, narrower at waist) ──
+  const sw=6.5,hw=5;// shoulder half-width, hip half-width
+  ctx.beginPath();ctx.moveTo(x-sw+dx,shouldY);ctx.lineTo(x-hw+dx,hipY);ctx.lineTo(x+hw+dx,hipY);ctx.lineTo(x+sw+dx,shouldY);ctx.closePath();ctx.fillStyle='#181c26';ctx.fill();
+  // Belt line
+  ctx.beginPath();ctx.moveTo(x-hw+dx,hipY);ctx.lineTo(x+hw+dx,hipY);ctx.strokeStyle='#111418';ctx.lineWidth=1;ctx.stroke();
+  // Center seam
+  ctx.beginPath();ctx.moveTo(x+dx*0.5,shouldY);ctx.lineTo(x+dx*0.5,hipY);ctx.strokeStyle='#10131a';ctx.lineWidth=0.5;ctx.stroke();
   if(!isBack){
-    ctx.beginPath();ctx.moveTo(x-1.5+dx,py+10);ctx.lineTo(x+dx*0.5,py+15);ctx.lineTo(x+1.5+dx,py+10);ctx.strokeStyle='#222838';ctx.lineWidth=0.7;ctx.stroke();
-    ctx.beginPath();ctx.moveTo(x+dx*0.5,py+11);ctx.lineTo(x-0.8+dx*0.5,py+24);ctx.lineTo(x+dx*0.5,py+25);ctx.lineTo(x+0.8+dx*0.5,py+24);ctx.closePath();ctx.fillStyle='#3a0e14';ctx.fill();
-    ctx.beginPath();ctx.moveTo(x-2.5+dx,py+9);ctx.lineTo(x+dx*0.5,py+11);ctx.lineTo(x+2.5+dx,py+9);ctx.strokeStyle='#444e5c';ctx.lineWidth=0.8;ctx.stroke();}
-  else{
-    ctx.beginPath();ctx.moveTo(x+dx*0.5,py+10);ctx.lineTo(x+dx*0.5,py+28);ctx.strokeStyle='#10131a';ctx.lineWidth=0.8;ctx.stroke();}
+    // Lapels
+    ctx.beginPath();ctx.moveTo(x-1.5+dx,shouldY+1);ctx.lineTo(x+dx*0.5,shouldY+5);ctx.lineTo(x+1.5+dx,shouldY+1);ctx.strokeStyle='#222838';ctx.lineWidth=0.6;ctx.stroke();
+    // Tie
+    ctx.beginPath();ctx.moveTo(x+dx*0.5,shouldY+2);ctx.lineTo(x-0.6+dx*0.5,hipY-4);ctx.lineTo(x+dx*0.5,hipY-3);ctx.lineTo(x+0.6+dx*0.5,hipY-4);ctx.closePath();ctx.fillStyle='#3a0e14';ctx.fill();
+    // Collar
+    ctx.beginPath();ctx.moveTo(x-2+dx,shouldY);ctx.lineTo(x+dx*0.5,shouldY+2);ctx.lineTo(x+2+dx,shouldY);ctx.strokeStyle='#444e5c';ctx.lineWidth=0.7;ctx.stroke();}
 
-  // ── FREE ARM ──
-  const freeX=x-cf.as*6+dx,freeS=isM?stride*6.5:0;
-  ctx.strokeStyle='#181c26';ctx.lineWidth=2.8;ctx.lineCap='round';
-  ctx.beginPath();ctx.moveTo(freeX,py+11);ctx.lineTo(freeX+freeS*0.3,py+21);ctx.stroke();
-  ctx.beginPath();ctx.moveTo(freeX+freeS*0.3,py+21);ctx.lineTo(freeX+freeS*0.4,py+29);ctx.stroke();
-  ctx.beginPath();ctx.arc(freeX+freeS*0.4,py+30,1.8,0,Math.PI*2);ctx.fillStyle='#b09070';ctx.fill();
+  // ── ARMS (proportional: upper 10px, forearm 10px) ──
+  const freeX=x-cf.as*sw+dx,freeS=isM?stride*7:0;
+  ctx.strokeStyle='#181c26';ctx.lineWidth=2.4;ctx.lineCap='round';
+  // Free arm: upper
+  ctx.beginPath();ctx.moveTo(freeX,shouldY+1);ctx.lineTo(freeX+freeS*0.25,shouldY+11);ctx.stroke();
+  // Free arm: forearm
+  ctx.lineWidth=2.2;ctx.beginPath();ctx.moveTo(freeX+freeS*0.25,shouldY+11);ctx.lineTo(freeX+freeS*0.35,shouldY+21);ctx.stroke();
+  // Hand
+  ctx.beginPath();ctx.arc(freeX+freeS*0.35,shouldY+22,1.6,0,Math.PI*2);ctx.fillStyle='#b09070';ctx.fill();
 
-  // ── FLASHLIGHT ARM (steady) ──
-  const flX=x+cf.as*6.5+dx,flEX=x+cf.fx*17,flEY=py+12;
-  ctx.strokeStyle='#181c26';ctx.lineWidth=2.8;
-  ctx.beginPath();ctx.moveTo(flX,py+11);ctx.lineTo(flX+cf.fx*2,py+18);ctx.stroke();
-  ctx.lineWidth=2.4;ctx.beginPath();ctx.moveTo(flX+cf.fx*2,py+18);ctx.lineTo(flEX,flEY);ctx.stroke();
-  ctx.beginPath();ctx.arc(flEX,flEY,1.8,0,Math.PI*2);ctx.fillStyle='#b09070';ctx.fill();
-  ctx.beginPath();ctx.moveTo(flEX,flEY);ctx.lineTo(flEX+cf.fx*8,flEY-1);ctx.strokeStyle='#48505a';ctx.lineWidth=3;ctx.lineCap='round';ctx.stroke();
-  ctx.beginPath();ctx.arc(flEX+cf.fx*9,flEY-1.5,2.5,0,Math.PI*2);ctx.fillStyle='#383f48';ctx.fill();
-  const flg=ctx.createRadialGradient(flEX+cf.fx*9,flEY-1.5,0,flEX+cf.fx*9,flEY-1.5,4);flg.addColorStop(0,'rgba(255,255,200,0.4)');flg.addColorStop(1,'transparent');ctx.fillStyle=flg;ctx.beginPath();ctx.arc(flEX+cf.fx*9,flEY-1.5,4,0,Math.PI*2);ctx.fill();
+  // Flashlight arm: upper
+  const flX=x+cf.as*sw+dx,flMidX=flX+cf.fx*3,flMidY=shouldY+10;
+  ctx.strokeStyle='#181c26';ctx.lineWidth=2.4;
+  ctx.beginPath();ctx.moveTo(flX,shouldY+1);ctx.lineTo(flMidX,flMidY);ctx.stroke();
+  // Forearm extending forward
+  const flEX=x+cf.fx*16,flEY=shouldY+4;
+  ctx.lineWidth=2.2;ctx.beginPath();ctx.moveTo(flMidX,flMidY);ctx.lineTo(flEX,flEY);ctx.stroke();
+  ctx.beginPath();ctx.arc(flEX,flEY,1.6,0,Math.PI*2);ctx.fillStyle='#b09070';ctx.fill();
+  // Flashlight
+  ctx.beginPath();ctx.moveTo(flEX,flEY);ctx.lineTo(flEX+cf.fx*7,flEY-0.5);ctx.strokeStyle='#48505a';ctx.lineWidth=2.5;ctx.lineCap='round';ctx.stroke();
+  ctx.beginPath();ctx.arc(flEX+cf.fx*8,flEY-1,2,0,Math.PI*2);ctx.fillStyle='#383f48';ctx.fill();
+  const flg=ctx.createRadialGradient(flEX+cf.fx*8,flEY-1,0,flEX+cf.fx*8,flEY-1,3.5);flg.addColorStop(0,'rgba(255,255,200,0.4)');flg.addColorStop(1,'transparent');ctx.fillStyle=flg;ctx.beginPath();ctx.arc(flEX+cf.fx*8,flEY-1,3.5,0,Math.PI*2);ctx.fill();
 
   // ── NECK ──
-  ctx.fillStyle='#b09070';ctx.fillRect(x-1.5+dx*0.5,py+5,3,5);
+  ctx.fillStyle='#b09070';ctx.fillRect(x-1.2+dx*0.3,neckY,2.4,2.5);
 
-  // ── HEAD — no face, just proportional shape with hair ──
+  // ── HEAD (7px tall, ~4px wide — smaller relative to body) ──
   const hx=x+dx*0.3;
-  // Skin-colored head shape (same for all directions)
-  ctx.beginPath();ctx.moveTo(hx-4.5,py+1);ctx.quadraticCurveTo(hx-5,py-3,hx-3,py-6);
-  ctx.quadraticCurveTo(hx,py-7.5,hx+3,py-6);ctx.quadraticCurveTo(hx+5,py-3,hx+4.5,py+1);
-  ctx.quadraticCurveTo(hx+3,py+3.5,hx,py+4);ctx.quadraticCurveTo(hx-3,py+3.5,hx-4.5,py+1);ctx.closePath();
+  // Skin shape
+  ctx.beginPath();ctx.moveTo(hx-3.5,headY+1);ctx.quadraticCurveTo(hx-3.8,headY-2,hx-2,headY-4.5);
+  ctx.quadraticCurveTo(hx,headY-5.5,hx+2,headY-4.5);ctx.quadraticCurveTo(hx+3.8,headY-2,hx+3.5,headY+1);
+  ctx.quadraticCurveTo(hx+2.5,headY+3,hx,headY+3.5);ctx.quadraticCurveTo(hx-2.5,headY+3,hx-3.5,headY+1);ctx.closePath();
   ctx.fillStyle='#b89878';ctx.fill();
-  // Hair on top
-  ctx.beginPath();ctx.moveTo(hx-5,py-1);ctx.quadraticCurveTo(hx-5.2,py-4.5,hx-2.5,py-6.5);
-  ctx.quadraticCurveTo(hx,py-8,hx+2.5,py-6.5);ctx.quadraticCurveTo(hx+5.2,py-4.5,hx+5,py-1);
-  ctx.quadraticCurveTo(hx+3,py-2.5,hx,py-4);ctx.quadraticCurveTo(hx-3,py-2.5,hx-5,py-1);ctx.closePath();
+  // Hair
+  ctx.beginPath();ctx.moveTo(hx-3.8,headY);ctx.quadraticCurveTo(hx-4,headY-3,hx-2,headY-5);
+  ctx.quadraticCurveTo(hx,headY-6,hx+2,headY-5);ctx.quadraticCurveTo(hx+4,headY-3,hx+3.8,headY);
+  ctx.quadraticCurveTo(hx+2.5,headY-1.5,hx,headY-2.5);ctx.quadraticCurveTo(hx-2.5,headY-1.5,hx-3.8,headY);ctx.closePath();
   ctx.fillStyle='#151210';ctx.fill();
   if(isBack){
     // Back view — hair covers most of head
-    ctx.beginPath();ctx.moveTo(hx-4.5,py+1);ctx.quadraticCurveTo(hx-5,py-3,hx-3,py-6);
-    ctx.quadraticCurveTo(hx,py-7.5,hx+3,py-6);ctx.quadraticCurveTo(hx+5,py-3,hx+4.5,py+1);
-    ctx.quadraticCurveTo(hx+3,py+2,hx,py+2.5);ctx.quadraticCurveTo(hx-3,py+2,hx-4.5,py+1);ctx.closePath();
+    ctx.beginPath();ctx.moveTo(hx-3.5,headY+1);ctx.quadraticCurveTo(hx-3.8,headY-2,hx-2,headY-4.5);
+    ctx.quadraticCurveTo(hx,headY-5.5,hx+2,headY-4.5);ctx.quadraticCurveTo(hx+3.8,headY-2,hx+3.5,headY+1);
+    ctx.quadraticCurveTo(hx+2,headY+2,hx,headY+2);ctx.quadraticCurveTo(hx-2,headY+2,hx-3.5,headY+1);ctx.closePath();
     ctx.fillStyle='#151210';ctx.fill();}
 
   ctx.restore();}
@@ -757,7 +890,7 @@ function drawBeam(ctx,px,py,player,g){ctx.save();const fd=player.dir;
 
 function drawHUD(ctx,W,H,g,ts,mob){const fs=mob?10:14,sf=mob?9:11,bH=mob?28:38;
   ctx.fillStyle='rgba(0,0,0,0.5)';ctx.fillRect(0,0,W,bH);ctx.fillStyle='rgba(0,170,255,0.06)';ctx.fillRect(0,bH-1,W,1);
-  ctx.font=`bold ${fs}px "JetBrains Mono","Fira Code",monospace`;ctx.fillStyle='#0af';ctx.textAlign='left';ctx.fillText(`◆ DATACENTER BREACH — LVL ${g.level}`,10,bH*0.65);
+  ctx.font=`bold ${fs}px "JetBrains Mono","Fira Code",monospace`;ctx.fillStyle='#0af';ctx.textAlign='left';ctx.fillText(`◆ DATACENTER DISASTER — LVL ${g.level}`,10,bH*0.65);
   // Count-up timer (center)
   const mins=Math.floor(g.elapsed/60),secs=g.elapsed%60;
   const tCol=g.elapsed<g.parTime?'#22ff66':g.elapsed<g.parTime*1.5?'#ffaa00':'#ff4444';
