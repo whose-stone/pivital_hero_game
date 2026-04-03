@@ -726,72 +726,96 @@ function drawCyberdeck(ctx,W,H,g){const cd=g.cyberdeckEntry;if(!cd)return;
 /* ===== AGENT — taller, centered, clean head ===== */
 function drawAgent(ctx,x,y,ts,player,walk){ctx.save();const f=player.facing;
   const isM=walk.moving||Math.abs(walk.x-player.x)>0.05||Math.abs(walk.y-player.y)>0.05;
-  const wP=isM?walk.walkCycle:0,stride=isM?Math.sin(wP):0,bob=isM?Math.abs(Math.sin(wP))*1.5:0;
-  const footY=y-2;
-  const py=footY-40-bob*0.4;
+  const wP=isM?walk.walkCycle:0,stride=isM?Math.sin(wP):0,bob=isM?Math.abs(Math.sin(wP))*1.2:0;
   const isBack=f==='nw'||f==='ne';
-  const fc={nw:{dx:-1,lx:-2,fx:-1,as:-1},ne:{dx:1,lx:2,fx:1,as:1},sw:{dx:-1,lx:-2,fx:-1,as:-1},se:{dx:1,lx:2,fx:1,as:1}};
+  const fc={nw:{dx:-1,fx:-1,as:-1},ne:{dx:1,fx:1,as:1},sw:{dx:-1,fx:-1,as:-1},se:{dx:1,fx:1,as:1}};
   const cf=fc[f],dx=cf.dx;
+  // Realistic proportions: ~52px total. Head=7, neck=2, torso=16, legs=27
+  const footY=y-2;
+  const hipY=footY-27-bob*0.3;   // hips — legs are 27px
+  const shouldY=hipY-16;          // shoulders — torso is 16px
+  const neckY=shouldY-2;          // neck
+  const headY=neckY-3;            // head center
 
   // Shadow
-  ctx.beginPath();ctx.ellipse(x,footY+4,11,5,0,0,Math.PI*2);ctx.fillStyle='rgba(0,0,0,0.2)';ctx.fill();
+  ctx.beginPath();ctx.ellipse(x,footY+4,10,4,0,0,Math.PI*2);ctx.fillStyle='rgba(0,0,0,0.2)';ctx.fill();
 
-  // ── LEGS ──
-  const lL=stride*7,rL=-stride*7;ctx.lineCap='round';
-  ctx.strokeStyle='#14171e';ctx.lineWidth=3.2;
-  ctx.beginPath();ctx.moveTo(x+3+dx,py+28);ctx.quadraticCurveTo(x+3+dx-rL*0.2,py+34,x+3+dx-rL*0.4,footY+1);ctx.stroke();
-  ctx.beginPath();ctx.ellipse(x+3+dx-rL*0.4,footY+2,3,1.3,0,0,Math.PI*2);ctx.fillStyle='#0a0a0e';ctx.fill();
-  ctx.strokeStyle='#1a1e26';ctx.lineWidth=3.5;
-  ctx.beginPath();ctx.moveTo(x-3+dx,py+28);ctx.quadraticCurveTo(x-3+dx-lL*0.2,py+34,x-3+dx-lL*0.4,footY+1);ctx.stroke();
-  ctx.beginPath();ctx.ellipse(x-3+dx-lL*0.4,footY+2,3,1.3,0,0,Math.PI*2);ctx.fillStyle='#0c0c10';ctx.fill();
+  // ── LEGS (27px, split: thigh 14 + shin 13) ──
+  const lL=stride*8,rL=-stride*8;ctx.lineCap='round';
+  const kneeOff=14;
+  // Back leg (thigh + shin)
+  ctx.strokeStyle='#14171e';ctx.lineWidth=2.8;
+  const bkX=x+2.5+dx,bkKneeX=bkX-rL*0.25,bkKneeY=hipY+kneeOff,bkFootX=bkX-rL*0.4;
+  ctx.beginPath();ctx.moveTo(bkX,hipY);ctx.quadraticCurveTo(bkKneeX+rL*0.1,bkKneeY-2,bkKneeX,bkKneeY);ctx.stroke();
+  ctx.strokeStyle='#12151c';ctx.lineWidth=2.6;
+  ctx.beginPath();ctx.moveTo(bkKneeX,bkKneeY);ctx.quadraticCurveTo(bkKneeX-rL*0.1,bkKneeY+7,bkFootX,footY);ctx.stroke();
+  ctx.beginPath();ctx.ellipse(bkFootX,footY+1.5,3,1.2,0,0,Math.PI*2);ctx.fillStyle='#0a0a0e';ctx.fill();
+  // Front leg
+  ctx.strokeStyle='#1a1e26';ctx.lineWidth=3;
+  const frX=x-2.5+dx,frKneeX=frX-lL*0.25,frKneeY=hipY+kneeOff,frFootX=frX-lL*0.4;
+  ctx.beginPath();ctx.moveTo(frX,hipY);ctx.quadraticCurveTo(frKneeX+lL*0.1,frKneeY-2,frKneeX,frKneeY);ctx.stroke();
+  ctx.strokeStyle='#181c24';ctx.lineWidth=2.8;
+  ctx.beginPath();ctx.moveTo(frKneeX,frKneeY);ctx.quadraticCurveTo(frKneeX-lL*0.1,frKneeY+7,frFootX,footY);ctx.stroke();
+  ctx.beginPath();ctx.ellipse(frFootX,footY+1.5,3,1.2,0,0,Math.PI*2);ctx.fillStyle='#0c0c10';ctx.fill();
 
-  // ── TORSO ──
-  ctx.beginPath();ctx.moveTo(x-7+dx,py+10);ctx.lineTo(x-8+dx,py+28);ctx.lineTo(x+8+dx,py+28);ctx.lineTo(x+7+dx,py+10);ctx.closePath();ctx.fillStyle='#181c26';ctx.fill();
-  ctx.beginPath();ctx.moveTo(x+dx*0.5,py+10);ctx.lineTo(x+dx*0.5,py+28);ctx.strokeStyle='#10131a';ctx.lineWidth=0.6;ctx.stroke();
+  // ── TORSO (16px, narrower at waist) ──
+  const sw=6.5,hw=5;// shoulder half-width, hip half-width
+  ctx.beginPath();ctx.moveTo(x-sw+dx,shouldY);ctx.lineTo(x-hw+dx,hipY);ctx.lineTo(x+hw+dx,hipY);ctx.lineTo(x+sw+dx,shouldY);ctx.closePath();ctx.fillStyle='#181c26';ctx.fill();
+  // Belt line
+  ctx.beginPath();ctx.moveTo(x-hw+dx,hipY);ctx.lineTo(x+hw+dx,hipY);ctx.strokeStyle='#111418';ctx.lineWidth=1;ctx.stroke();
+  // Center seam
+  ctx.beginPath();ctx.moveTo(x+dx*0.5,shouldY);ctx.lineTo(x+dx*0.5,hipY);ctx.strokeStyle='#10131a';ctx.lineWidth=0.5;ctx.stroke();
   if(!isBack){
-    ctx.beginPath();ctx.moveTo(x-1.5+dx,py+10);ctx.lineTo(x+dx*0.5,py+15);ctx.lineTo(x+1.5+dx,py+10);ctx.strokeStyle='#222838';ctx.lineWidth=0.7;ctx.stroke();
-    ctx.beginPath();ctx.moveTo(x+dx*0.5,py+11);ctx.lineTo(x-0.8+dx*0.5,py+24);ctx.lineTo(x+dx*0.5,py+25);ctx.lineTo(x+0.8+dx*0.5,py+24);ctx.closePath();ctx.fillStyle='#3a0e14';ctx.fill();
-    ctx.beginPath();ctx.moveTo(x-2.5+dx,py+9);ctx.lineTo(x+dx*0.5,py+11);ctx.lineTo(x+2.5+dx,py+9);ctx.strokeStyle='#444e5c';ctx.lineWidth=0.8;ctx.stroke();}
-  else{
-    ctx.beginPath();ctx.moveTo(x+dx*0.5,py+10);ctx.lineTo(x+dx*0.5,py+28);ctx.strokeStyle='#10131a';ctx.lineWidth=0.8;ctx.stroke();}
+    // Lapels
+    ctx.beginPath();ctx.moveTo(x-1.5+dx,shouldY+1);ctx.lineTo(x+dx*0.5,shouldY+5);ctx.lineTo(x+1.5+dx,shouldY+1);ctx.strokeStyle='#222838';ctx.lineWidth=0.6;ctx.stroke();
+    // Tie
+    ctx.beginPath();ctx.moveTo(x+dx*0.5,shouldY+2);ctx.lineTo(x-0.6+dx*0.5,hipY-4);ctx.lineTo(x+dx*0.5,hipY-3);ctx.lineTo(x+0.6+dx*0.5,hipY-4);ctx.closePath();ctx.fillStyle='#3a0e14';ctx.fill();
+    // Collar
+    ctx.beginPath();ctx.moveTo(x-2+dx,shouldY);ctx.lineTo(x+dx*0.5,shouldY+2);ctx.lineTo(x+2+dx,shouldY);ctx.strokeStyle='#444e5c';ctx.lineWidth=0.7;ctx.stroke();}
 
-  // ── FREE ARM ──
-  const freeX=x-cf.as*6+dx,freeS=isM?stride*6.5:0;
-  ctx.strokeStyle='#181c26';ctx.lineWidth=2.8;ctx.lineCap='round';
-  ctx.beginPath();ctx.moveTo(freeX,py+11);ctx.lineTo(freeX+freeS*0.3,py+21);ctx.stroke();
-  ctx.beginPath();ctx.moveTo(freeX+freeS*0.3,py+21);ctx.lineTo(freeX+freeS*0.4,py+29);ctx.stroke();
-  ctx.beginPath();ctx.arc(freeX+freeS*0.4,py+30,1.8,0,Math.PI*2);ctx.fillStyle='#b09070';ctx.fill();
+  // ── ARMS (proportional: upper 10px, forearm 10px) ──
+  const freeX=x-cf.as*sw+dx,freeS=isM?stride*7:0;
+  ctx.strokeStyle='#181c26';ctx.lineWidth=2.4;ctx.lineCap='round';
+  // Free arm: upper
+  ctx.beginPath();ctx.moveTo(freeX,shouldY+1);ctx.lineTo(freeX+freeS*0.25,shouldY+11);ctx.stroke();
+  // Free arm: forearm
+  ctx.lineWidth=2.2;ctx.beginPath();ctx.moveTo(freeX+freeS*0.25,shouldY+11);ctx.lineTo(freeX+freeS*0.35,shouldY+21);ctx.stroke();
+  // Hand
+  ctx.beginPath();ctx.arc(freeX+freeS*0.35,shouldY+22,1.6,0,Math.PI*2);ctx.fillStyle='#b09070';ctx.fill();
 
-  // ── FLASHLIGHT ARM (steady) ──
-  const flX=x+cf.as*6.5+dx,flEX=x+cf.fx*17,flEY=py+12;
-  ctx.strokeStyle='#181c26';ctx.lineWidth=2.8;
-  ctx.beginPath();ctx.moveTo(flX,py+11);ctx.lineTo(flX+cf.fx*2,py+18);ctx.stroke();
-  ctx.lineWidth=2.4;ctx.beginPath();ctx.moveTo(flX+cf.fx*2,py+18);ctx.lineTo(flEX,flEY);ctx.stroke();
-  ctx.beginPath();ctx.arc(flEX,flEY,1.8,0,Math.PI*2);ctx.fillStyle='#b09070';ctx.fill();
-  ctx.beginPath();ctx.moveTo(flEX,flEY);ctx.lineTo(flEX+cf.fx*8,flEY-1);ctx.strokeStyle='#48505a';ctx.lineWidth=3;ctx.lineCap='round';ctx.stroke();
-  ctx.beginPath();ctx.arc(flEX+cf.fx*9,flEY-1.5,2.5,0,Math.PI*2);ctx.fillStyle='#383f48';ctx.fill();
-  const flg=ctx.createRadialGradient(flEX+cf.fx*9,flEY-1.5,0,flEX+cf.fx*9,flEY-1.5,4);flg.addColorStop(0,'rgba(255,255,200,0.4)');flg.addColorStop(1,'transparent');ctx.fillStyle=flg;ctx.beginPath();ctx.arc(flEX+cf.fx*9,flEY-1.5,4,0,Math.PI*2);ctx.fill();
+  // Flashlight arm: upper
+  const flX=x+cf.as*sw+dx,flMidX=flX+cf.fx*3,flMidY=shouldY+10;
+  ctx.strokeStyle='#181c26';ctx.lineWidth=2.4;
+  ctx.beginPath();ctx.moveTo(flX,shouldY+1);ctx.lineTo(flMidX,flMidY);ctx.stroke();
+  // Forearm extending forward
+  const flEX=x+cf.fx*16,flEY=shouldY+4;
+  ctx.lineWidth=2.2;ctx.beginPath();ctx.moveTo(flMidX,flMidY);ctx.lineTo(flEX,flEY);ctx.stroke();
+  ctx.beginPath();ctx.arc(flEX,flEY,1.6,0,Math.PI*2);ctx.fillStyle='#b09070';ctx.fill();
+  // Flashlight
+  ctx.beginPath();ctx.moveTo(flEX,flEY);ctx.lineTo(flEX+cf.fx*7,flEY-0.5);ctx.strokeStyle='#48505a';ctx.lineWidth=2.5;ctx.lineCap='round';ctx.stroke();
+  ctx.beginPath();ctx.arc(flEX+cf.fx*8,flEY-1,2,0,Math.PI*2);ctx.fillStyle='#383f48';ctx.fill();
+  const flg=ctx.createRadialGradient(flEX+cf.fx*8,flEY-1,0,flEX+cf.fx*8,flEY-1,3.5);flg.addColorStop(0,'rgba(255,255,200,0.4)');flg.addColorStop(1,'transparent');ctx.fillStyle=flg;ctx.beginPath();ctx.arc(flEX+cf.fx*8,flEY-1,3.5,0,Math.PI*2);ctx.fill();
 
   // ── NECK ──
-  ctx.fillStyle='#b09070';ctx.fillRect(x-1.5+dx*0.5,py+5,3,5);
+  ctx.fillStyle='#b09070';ctx.fillRect(x-1.2+dx*0.3,neckY,2.4,2.5);
 
-  // ── HEAD — no face, just proportional shape with hair ──
+  // ── HEAD (7px tall, ~4px wide — smaller relative to body) ──
   const hx=x+dx*0.3;
-  // Skin-colored head shape (same for all directions)
-  ctx.beginPath();ctx.moveTo(hx-4.5,py+1);ctx.quadraticCurveTo(hx-5,py-3,hx-3,py-6);
-  ctx.quadraticCurveTo(hx,py-7.5,hx+3,py-6);ctx.quadraticCurveTo(hx+5,py-3,hx+4.5,py+1);
-  ctx.quadraticCurveTo(hx+3,py+3.5,hx,py+4);ctx.quadraticCurveTo(hx-3,py+3.5,hx-4.5,py+1);ctx.closePath();
+  // Skin shape
+  ctx.beginPath();ctx.moveTo(hx-3.5,headY+1);ctx.quadraticCurveTo(hx-3.8,headY-2,hx-2,headY-4.5);
+  ctx.quadraticCurveTo(hx,headY-5.5,hx+2,headY-4.5);ctx.quadraticCurveTo(hx+3.8,headY-2,hx+3.5,headY+1);
+  ctx.quadraticCurveTo(hx+2.5,headY+3,hx,headY+3.5);ctx.quadraticCurveTo(hx-2.5,headY+3,hx-3.5,headY+1);ctx.closePath();
   ctx.fillStyle='#b89878';ctx.fill();
-  // Hair on top
-  ctx.beginPath();ctx.moveTo(hx-5,py-1);ctx.quadraticCurveTo(hx-5.2,py-4.5,hx-2.5,py-6.5);
-  ctx.quadraticCurveTo(hx,py-8,hx+2.5,py-6.5);ctx.quadraticCurveTo(hx+5.2,py-4.5,hx+5,py-1);
-  ctx.quadraticCurveTo(hx+3,py-2.5,hx,py-4);ctx.quadraticCurveTo(hx-3,py-2.5,hx-5,py-1);ctx.closePath();
+  // Hair
+  ctx.beginPath();ctx.moveTo(hx-3.8,headY);ctx.quadraticCurveTo(hx-4,headY-3,hx-2,headY-5);
+  ctx.quadraticCurveTo(hx,headY-6,hx+2,headY-5);ctx.quadraticCurveTo(hx+4,headY-3,hx+3.8,headY);
+  ctx.quadraticCurveTo(hx+2.5,headY-1.5,hx,headY-2.5);ctx.quadraticCurveTo(hx-2.5,headY-1.5,hx-3.8,headY);ctx.closePath();
   ctx.fillStyle='#151210';ctx.fill();
   if(isBack){
     // Back view — hair covers most of head
-    ctx.beginPath();ctx.moveTo(hx-4.5,py+1);ctx.quadraticCurveTo(hx-5,py-3,hx-3,py-6);
-    ctx.quadraticCurveTo(hx,py-7.5,hx+3,py-6);ctx.quadraticCurveTo(hx+5,py-3,hx+4.5,py+1);
-    ctx.quadraticCurveTo(hx+3,py+2,hx,py+2.5);ctx.quadraticCurveTo(hx-3,py+2,hx-4.5,py+1);ctx.closePath();
+    ctx.beginPath();ctx.moveTo(hx-3.5,headY+1);ctx.quadraticCurveTo(hx-3.8,headY-2,hx-2,headY-4.5);
+    ctx.quadraticCurveTo(hx,headY-5.5,hx+2,headY-4.5);ctx.quadraticCurveTo(hx+3.8,headY-2,hx+3.5,headY+1);
+    ctx.quadraticCurveTo(hx+2,headY+2,hx,headY+2);ctx.quadraticCurveTo(hx-2,headY+2,hx-3.5,headY+1);ctx.closePath();
     ctx.fillStyle='#151210';ctx.fill();}
 
   ctx.restore();}
