@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { submitScoreToFirebase, fetchTopScores, fetchLevelScores } from "./firebase";
+import { submitScoreToFirebase, fetchTopScores, fetchLevelScores, saveClaimToFirebase } from "./firebase";
+import emailjs from '@emailjs/browser';
 
 const TW=96,TH=48,MW=31,MH=31,WS=0.06,RH=60,NUM_DRIVES=4,FRAGS_PER=4;
 const USB_COLORS=[
@@ -19,6 +20,8 @@ function genMaze(w,h){const m=Array.from({length:h},()=>Array(w).fill(1));const 
   function c(x,y){m[y][x]=0;for(const[dx,dy]of sh([...d])){const nx=x+dx,ny=y+dy;if(nx>0&&nx<w-1&&ny>0&&ny<h-1&&m[ny][nx]===1){m[y+dy/2][x+dx/2]=0;c(nx,ny);}}}
   c(1,1);for(let i=0;i<w*h*0.12;i++){const rx=1+Math.floor(Math.random()*(w-2)),ry=1+Math.floor(Math.random()*(h-2));
     if(m[ry][rx]===1){let a=0;if(ry>0&&m[ry-1][rx]===0)a++;if(ry<h-1&&m[ry+1][rx]===0)a++;if(rx>0&&m[ry][rx-1]===0)a++;if(rx<w-1&&m[ry][rx+1]===0)a++;if(a>=2)m[ry][rx]=0;}}return m;}
+function generateProductKey(){const c='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';const r=()=>Array.from({length:4},()=>c[Math.floor(Math.random()*c.length)]).join('');
+  return `${r()}-${r()}-${r()}`;}
 function placeOnFloor(maze,count,avoid){const items=[],av=new Set(avoid.map(p=>`${p.x},${p.y}`));let a=0;
   while(items.length<count&&a<3000){const x=1+Math.floor(Math.random()*(MW-2)),y=1+Math.floor(Math.random()*(MH-2));
     if(maze[y][x]===0&&!av.has(`${x},${y}`)){items.push({x,y});av.add(`${x},${y}`);}a++;}return items;}
@@ -56,6 +59,10 @@ export default function DataCenterMaze(){
   const[showScoreboard,setShowScoreboard]=useState(false);
   const[showSplash,setShowSplash]=useState(true);
   const[showLevelSelect,setShowLevelSelect]=useState(false);
+  const[showLevel10Win,setShowLevel10Win]=useState(false);
+  const[level10Key,setLevel10Key]=useState('');
+  const[userEmail,setUserEmail]=useState('');
+  const[emailStatus,setEmailStatus]=useState('idle'); // idle, sending, sent, error
   const[firebaseScores,setFirebaseScores]=useState({overall:[],levels:{}});
   const[scoresLoading,setScoresLoading]=useState(false);
   const highScoresRef=useRef(null);
@@ -127,7 +134,10 @@ export default function DataCenterMaze(){
       aid=requestAnimationFrame(splashLoop);};
     aid=requestAnimationFrame(splashLoop);
     // Also allow click/touch to dismiss
-    const dismiss=()=>{if(Date.now()-splashStartRef.current>1500)setGamePhase('playing');};
+    const dismiss=()=>{
+      if(showLevel10Win){setShowLevel10Win(false);initGame(1);return;}
+      if(Date.now()-splashStartRef.current>1500)setGamePhase('playing');
+    };
     window.addEventListener('click',dismiss);window.addEventListener('touchstart',dismiss);
     return()=>{cancelAnimationFrame(aid);window.removeEventListener('click',dismiss);window.removeEventListener('touchstart',dismiss);};
   },[gamePhase]);
@@ -219,8 +229,34 @@ export default function DataCenterMaze(){
     // Submit to Firebase
     await submitScoreToFirebase(entry);
     refreshScores();
-    g.showScoreEntry=false;setGs({...g});
+    g.showScoreEntry=false;
+    if(g.level===10){const key=generateProductKey();setLevel10Key(key);setShowLevel10Win(true);setUserEmail('');setEmailStatus('idle');}
+    setGs({...g});
   },[refreshScores]);
+
+  const handleSendCertificate=useCallback(async(e)=>{
+    if(e)e.preventDefault();
+    if(!userEmail||!userEmail.includes('@')){alert('Please enter a valid email address.');return;}
+    const g=gRef.current;if(!g)return;
+    setEmailStatus('sending');
+    
+    // 1. Save to Firestore
+    const saved=await saveClaimToFirebase(userEmail,level10Key,g.levelScore);
+    
+    // 2. Send via EmailJS
+    try{
+      await emailjs.send('service_30qpyed','template_datacenter', {
+        to_email: userEmail,
+        product_key: level10Key,
+        score: g.levelScore.toLocaleString(),
+        date: new Date().toLocaleDateString()
+      }, 'hLd3dUtYCuTR19cJr');
+      setEmailStatus('sent');
+    }catch(err){
+      console.error('Email failed:',err);
+      setEmailStatus(saved?'sent_db_only':'error'); // If DB saved but email failed
+    }
+  },[userEmail,level10Key]);
 
   const openCyberdeck=useCallback(()=>{
     const g=gRef.current;if(!g||g.atBrokenServer===null||g.cyberdeckEntry)return;
@@ -240,6 +276,10 @@ export default function DataCenterMaze(){
 
   useEffect(()=>{const kd=(e)=>{const k=e.key.toLowerCase();keysRef.current.add(k);
     if(['w','a','s','d','arrowup','arrowdown','arrowleft','arrowright','escape','enter','tab'].includes(k))e.preventDefault();
+    if(showLevel10Win){
+      if(emailStatus==='sent'||emailStatus==='sent_db_only'){setShowLevel10Win(false);initGame(1);return;}
+      return; // Prevent dismissal while entering email
+    }
     if(gamePhase==='splash'){if(Date.now()-splashStartRef.current>1500){setGamePhase('playing');}return;}
     if(k==='escape')cancelCode();
     if(k==='enter'){const g=gRef.current;if(!g)return;
@@ -376,7 +416,8 @@ export default function DataCenterMaze(){
       ctx.fillStyle=n.text.includes('DENIED')?'#ff4444':n.text.includes('RECOVERED')?'#ffd700':n.text.includes('ENTER')||n.text.includes('SERVER')?'#ffd700':n.text.includes('COLLECTED')?USB_COLORS[g.levelColor].hex:'#0ff';
       ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(n.text,W/2,H-82);ctx.globalAlpha=1;}
     if(g.codeEntry)drawCodeEntry(ctx,W,H,g);
-    if(g.cyberdeckEntry)drawCyberdeck(ctx,W,H,g);};
+    if(g.cyberdeckEntry)drawCyberdeck(ctx,W,H,g);
+    if(showLevel10Win)drawLevel10Win(ctx,W,H,ts,level10Key,emailStatus);};
 
   const phoneUI=gs&&showPhone&&!gs.codeEntry?(
     <div style={{position:'absolute',top:'50%',left:'50%',transform:'translate(-50%,-50%)',width:280,background:'#0a0c12',border:'2px solid #1a2040',borderRadius:16,padding:16,boxShadow:'0 8px 40px rgba(0,0,0,0.8)',zIndex:10,fontFamily:'"JetBrains Mono",monospace'}}>
@@ -436,6 +477,34 @@ export default function DataCenterMaze(){
         </div>))}
     </div>):null;
 
+  const level10WinUI = showLevel10Win && (emailStatus === 'idle' || emailStatus === 'sending' || emailStatus === 'error' || emailStatus === 'sent_db_only') ? (
+    <div style={{position:'absolute',top:'50%',left:'50%',transform:'translate(-50%,-50%)',width:360,background:'rgba(10,15,30,0.95)',border:'2px solid #0af',borderRadius:12,padding:24,boxShadow:'0 0 50px rgba(0,170,255,0.4)',zIndex:100,fontFamily:'"JetBrains Mono",monospace',textAlign:'center'}}>
+      <div style={{color:'#0af',fontSize:18,fontWeight:'bold',marginBottom:16}}>CLAIM YOUR CERTIFICATE</div>
+      <div style={{color:'#8899aa',fontSize:12,marginBottom:20,lineHeight:1.5}}>Enter your email to receive your official Level 10 Mastery Certificate and AI Consultation voucher.</div>
+      <form onSubmit={handleSendCertificate}>
+        <input 
+          type="email" 
+          value={userEmail} 
+          onChange={(e)=>setUserEmail(e.target.value)}
+          placeholder="Enter your email address"
+          disabled={emailStatus === 'sending'}
+          style={{width:'100%',background:'#050810',border:'1px solid #1a2040',borderRadius:6,padding:'12px 16px',color:'#fff',fontSize:14,fontFamily:'inherit',marginBottom:16,outline:'none',boxSizing:'border-box'}}
+          required
+        />
+        {emailStatus === 'error' && <div style={{color:'#ff4444',fontSize:11,marginBottom:12}}>Failed to send email. But don't worry, your claim is saved!</div>}
+        {emailStatus === 'sent_db_only' && <div style={{color:'#ffaa00',fontSize:11,marginBottom:12}}>Claim saved to database, but email delivery failed.</div>}
+        <button 
+          type="submit"
+          disabled={emailStatus === 'sending'}
+          style={{width:'100%',background:emailStatus === 'sending' ? '#222' : 'linear-gradient(135deg,#0af,#0088cc)',color:'#fff',border:'none',padding:'14px',borderRadius:6,fontSize:14,fontWeight:'bold',fontFamily:'inherit',cursor:emailStatus === 'sending' ? 'default' : 'pointer',boxShadow:'0 0 15px rgba(0,170,255,0.2)'}}
+        >
+          {emailStatus === 'sending' ? 'SENDING...' : 'SEND MY CERTIFICATE'}
+        </button>
+      </form>
+      <div style={{marginTop:16,fontSize:10,color:'#445'}}>* Your performance and email will be saved to the Pivital Systems Mastery Database.</div>
+    </div>
+  ) : null;
+
   const startFromSplash=(level=1)=>{setShowSplash(false);setShowLevelSelect(false);initGame(level);};
 
   if(showSplash){return(
@@ -469,6 +538,7 @@ export default function DataCenterMaze(){
       <canvas ref={canvasRef} width={dims.w} height={dims.h} style={{border:'1px solid #111828',borderRadius:4,maxWidth:'100%',maxHeight:isMobile?'50vh':'calc(100vh - 70px)',touchAction:'none'}}/>
       {phoneUI}
       {scoreboardUI}
+      {level10WinUI}
       {isMobile?(
         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'4px 8px',width:'100%',boxSizing:'border-box'}}>
           <div style={{display:'flex',flexDirection:'column',gap:4,flex:1}}>
@@ -580,6 +650,57 @@ function drawSplash(ctx,W,H,ts,elapsed){
   // CRT vignette
   const vg=ctx.createRadialGradient(cx,cy,W*0.25,cx,cy,Math.max(W,H)*0.6);
   vg.addColorStop(0,'rgba(0,0,0,0)');vg.addColorStop(0.8,'rgba(0,0,0,0.15)');vg.addColorStop(1,'rgba(0,0,0,0.6)');ctx.fillStyle=vg;ctx.fillRect(0,0,W,H);}
+
+function drawLevel10Win(ctx,W,H,ts,key,emailStatus){
+  ctx.fillStyle='#000';ctx.fillRect(0,0,W,H);
+  const cx=W/2,cy=H/2;
+  // Background Matrix effect (very subtle)
+  ctx.font='10px monospace';ctx.globalAlpha=0.03;ctx.fillStyle='#0f0';
+  for(let i=0;i<W;i+=20)for(let j=0;j<H;j+=20){if(Math.random()>0.8)ctx.fillText(Math.floor(Math.random()*10),i,j);}
+  ctx.globalAlpha=1;
+
+  // Certificate Border
+  ctx.strokeStyle='#ffd700';ctx.lineWidth=2;ctx.strokeRect(40,40,W-80,H-80);
+  ctx.strokeStyle='#ffd700';ctx.lineWidth=1;ctx.strokeRect(50,50,W-100,H-100);
+
+  // Title
+  ctx.shadowBlur=15;ctx.shadowColor='#ffd700';ctx.fillStyle='#ffd700';ctx.textAlign='center';
+  ctx.font='bold 32px "JetBrains Mono",monospace';ctx.fillText('◆ DATACENTER BREACH MASTERY ◆',cx,cy-140);
+  ctx.shadowBlur=0;
+
+  ctx.font='16px "JetBrains Mono",monospace';ctx.fillStyle='#0af';
+  ctx.fillText('SECURITY CLEARANCE LEVEL 10 GRANTED',cx,cy-90);
+
+  // Key Area
+  const boxW=420,boxH=100;
+  ctx.fillStyle='rgba(10,20,40,0.9)';ctx.fillRect(cx-boxW/2,cy-40,boxW,boxH);
+  ctx.strokeStyle='#0af';ctx.lineWidth=2;ctx.strokeRect(cx-boxW/2,cy-40,boxW,boxH);
+  
+  ctx.font='12px "JetBrains Mono",monospace';ctx.fillStyle='#888';
+  ctx.fillText('PIVITAL SYSTEMS PRODUCT KEY',cx,cy-20);
+  
+  ctx.font='bold 36px "Courier New",monospace';ctx.fillStyle='#fff';
+  ctx.shadowBlur=10;ctx.shadowColor='#fff';
+  ctx.fillText(key,cx,cy+30);
+  ctx.shadowBlur=0;
+
+  // Rewards
+  ctx.font='bold 20px "JetBrains Mono",monospace';ctx.fillStyle='#0f0';
+  ctx.fillText('REWARD UNLOCKED: 4 FREE HOURS OF AI CONSULTATION',cx,cy+100);
+  
+  ctx.font='13px "JetBrains Mono",monospace';ctx.fillStyle='#556';
+  ctx.fillText('Enter your email below to receive your official certificate.',cx,cy+130);
+
+  // Branding
+  ctx.font='bold 14px "JetBrains Mono",monospace';ctx.fillStyle='#ffd700';
+  ctx.fillText('PIVITAL SYSTEMS — CORPORATE ELITE DIVISION',cx,cy+180);
+
+  // Dismiss button prompt only if sent
+  if((emailStatus==='sent'||emailStatus==='sent_db_only')&&Math.sin(ts/400)>0){
+    ctx.font='12px "JetBrains Mono",monospace';ctx.fillStyle='#0af';
+    ctx.fillText('CERTIFICATE SENT! PRESS ANY KEY TO CONTINUE',cx,H-70);
+  }
+}
 
 /* ===== FLOOR ===== */
 function drawFloor(ctx,x,y,br,glowTs,gx,gy){const hw=TW/2,hh=TH/2;ctx.save();ctx.globalAlpha=1;

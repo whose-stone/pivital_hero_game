@@ -53,3 +53,21 @@ export async function fetchLevelScores(level, count = 20) {
     return null;
   }
 }
+const CLAIMS_COLLECTION = 'claims';
+
+export async function saveClaimToFirebase(email, key, score) {
+  try {
+    await addDoc(collection(db, CLAIMS_COLLECTION), {
+      email,
+      key,
+      score,
+      level: 10,
+      timestamp: Date.now(),
+      date: new Date().toISOString()
+    });
+    return true;
+  } catch (e) {
+    console.warn('Firebase claim save failed:', e);
+    return false;
+  }
+}
