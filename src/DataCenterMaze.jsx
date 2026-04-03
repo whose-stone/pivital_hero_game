@@ -528,7 +528,7 @@ function drawSplash(ctx,W,H,ts,elapsed){
     ctx.shadowBlur=0;
     // Subtitle
     ctx.font=`${Math.min(14,W*0.018)}px "JetBrains Mono",monospace`;ctx.fillStyle='#556';
-    ctx.fillText('A PIVITAL HERO GAME',cx,cy+15);
+    ctx.fillText('A PIVITAL SYSTEMS GAME',cx,cy+15);
 
     // Electrical arc across title
     if(Math.sin(ts/500)>0.7){ctx.strokeStyle='rgba(0,170,255,0.6)';ctx.lineWidth=1.5;ctx.shadowBlur=8;ctx.shadowColor='#0af';
@@ -543,7 +543,7 @@ function drawSplash(ctx,W,H,ts,elapsed){
 
     // Copyright / version
     ctx.font=`${Math.min(10,W*0.013)}px "JetBrains Mono",monospace`;ctx.fillStyle='#334';
-    ctx.fillText('2026 PIVITAL STUDIOS',cx,H-20);
+    ctx.fillText('2026 PIVITAL SYSTEMS',cx,H-20);
     ctx.globalAlpha=1;}
 
   // CRT vignette
