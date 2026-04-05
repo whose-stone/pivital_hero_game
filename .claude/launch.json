@@ -1,0 +1,16 @@
+{
+  "servers": [
+    {
+      "name": "Vite Dev Server",
+      "command": "npm run dev",
+      "port": 5173,
+      "description": "React app with Vite HMR (Datacenter Breach game)"
+    },
+    {
+      "name": "Vite Preview",
+      "command": "npm run preview",
+      "port": 4173,
+      "description": "Serves production build locally"
+    }
+  ]
+}
