@@ -1,5 +1,12 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { submitScoreToFirebase, fetchTopScores, fetchLevelScores } from "./firebase";
+import { SPRITE_SRC, SPRITE_W, SPRITE_H, SPRITE_COLS, DIR_ROW } from "./spriteData";
+
+// Pre-load sprite image once
+const _spriteImg = new Image();
+_spriteImg.src = SPRITE_SRC;
+let SPRITE_READY = false;
+_spriteImg.onload = () => { SPRITE_READY = true; };
 
 const TW=96,TH=48,MW=31,MH=31,WS=0.06,RH=60,NUM_DRIVES=4,FRAGS_PER=4;
 
@@ -851,8 +858,37 @@ function drawCyberdeck(ctx,W,H,g){const cd=g.cyberdeckEntry;if(!cd)return;
     ctx.fillStyle=accentCol.hex;ctx.fillRect(cx-bw/2+12,cy+bh/2-30,(bw-24)*prog,8);}
   ctx.textAlign='left';}
 
-/* ===== AGENT ===== */
-function drawAgent(ctx,x,y,ts,player,walk){ctx.save();const f=player.facing;
+/* ===== AGENT — sprite-based ===== */
+function drawAgent(ctx,x,y,ts,player,walk){
+  // Advance walk frame counter (8 frames, cycle at ~10fps)
+  const FRAMES=8;
+  const isMoving=walk.moving||Math.abs(walk.x-player.x)>0.05||Math.abs(walk.y-player.y)>0.05;
+  const frame=isMoving?Math.floor((walk.walkCycle/0.18*0.14))%FRAMES:0;
+  const row=DIR_ROW[player.facing]??0;
+
+  // Render drop shadow first
+  ctx.save();
+  ctx.beginPath();ctx.ellipse(x,y-2,18,7,0,0,Math.PI*2);
+  ctx.fillStyle='rgba(0,0,0,0.28)';ctx.fill();
+  ctx.restore();
+
+  if(SPRITE_READY){
+    const sw=SPRITE_W,sh=SPRITE_H;
+    const sx=frame*sw, sy=row*sh;
+    // Draw sprite centered on isometric foot position
+    // Scale sprite to match game character size (~80px tall in game coords)
+    const scale=0.48;
+    const dw=sw*scale, dh=sh*scale;
+    ctx.save();
+    ctx.drawImage(_spriteImg, sx, sy, sw, sh, x-dw/2, y-dh+4, dw, dh);
+    ctx.restore();
+  } else {
+    // Fallback: draw procedural agent if sprite not loaded yet
+    _drawAgentFallback(ctx,x,y,ts,player,walk);
+  }
+}
+
+function _drawAgentFallback(ctx,x,y,ts,player,walk){ctx.save();const f=player.facing;
   const isM=walk.moving||Math.abs(walk.x-player.x)>0.05||Math.abs(walk.y-player.y)>0.05;
   const wP=isM?walk.walkCycle:0,stride=isM?Math.sin(wP):0,bob=isM?Math.abs(Math.sin(wP))*1.2:0;
   const isBack=f==='nw'||f==='ne';
