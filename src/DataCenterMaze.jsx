@@ -8,7 +8,8 @@ _spriteImg.src = SPRITE_SRC;
 let SPRITE_READY = false;
 _spriteImg.onload = () => { SPRITE_READY = true; };
 
-const TW=96,TH=48,MW=31,MH=31,WS=0.06,RH=60,NUM_DRIVES=4,FRAGS_PER=4;
+const TW=96,TH=48,MW=31,MH=31,WS=0.10,RH=60,NUM_DRIVES=4,FRAGS_PER=4;
+// Walk: 0.10 tiles/frame = ~10 frames to cross 1 tile at 60fps = ~165ms per tile
 
 // GBC-era palette constants
 const GBC_DARK='#020408';
@@ -175,7 +176,7 @@ export default function DataCenterMaze(){
           const patrolPts=placeOnFloor(maze,4,[gSpots[0]]);
           guards.push({x:gSpots[0].x,y:gSpots[0].y,walkPos:{x:gSpots[0].x,y:gSpots[0].y},dir:{x:0,y:1},patrol:[gSpots[0],...patrolPts],patrolIdx:0,moveTimer:0,sightRange,alertTimer:0});}}}
     const parTime=120+(level-1)*30;
-    walkRef.current={x:1,y:1,moving:false,walkCycle:0};revealedRef.current=new Uint8Array(MW*MH);
+    walkRef.current={x:1,y:1,moving:false,walkCycle:0,queued:null};revealedRef.current=new Uint8Array(MW*MH);
     sparksRef.current=[];arcsRef.current=[];dustRef.current=[];notifRef.current={text:'',timer:0};setShowPhone(false);
     const p=toIso(1,1);camRef.current={x:p.x,y:p.y};
     const g={maze,player,drives,brokenServers,servers,score:0,totalDrives:numDrives,won:false,levelComplete:false,gameOver:false,gameOverReason:null,level,flashRadius:12,fragments:[],codeEntry:null,atDrive:null,usbSticks,tools,guards,usbInventory:[],collectedTools:[],atBrokenServer:null,cyberdeckEntry:null,levelColor,useTools,startTime:Date.now(),parTime,elapsed:0,levelScore:0,showScoreEntry:false,scoreInitials:['A','A','A'],scoreCursor:0};
@@ -209,7 +210,9 @@ export default function DataCenterMaze(){
       else if(dx===-1)ce.cursor=Math.max(0,ce.cursor-1);
       else if(dx===1)ce.cursor=Math.min(3,ce.cursor+1);
       setGs({...g});return;}
-    const w=walkRef.current;if(w.moving)return;
+    const w=walkRef.current;
+    // While moving: queue this direction so it fires as soon as we reach the next tile
+    if(w.moving){w.queued={dx,dy};return;}
     if(dx===-1&&dy===0)g.player.facing='nw';
     else if(dx===1&&dy===0)g.player.facing='se';
     else if(dx===0&&dy===-1)g.player.facing='ne';
@@ -291,15 +294,18 @@ export default function DataCenterMaze(){
   useEffect(()=>{if(!gs)return;let aid;
     const loop=(ts)=>{const g=gRef.current;if(!g){aid=requestAnimationFrame(loop);return;}
       const keys=keysRef.current;
-      if(!isMobile&&ts-lastMoveRef.current>100&&!g.won&&!g.levelComplete&&!g.gameOver){let dx=0,dy=0;
+      if(!isMobile&&ts-lastMoveRef.current>16&&!g.won&&!g.levelComplete&&!g.gameOver){let dx=0,dy=0;
         if(keys.has('w')||keys.has('arrowup'))dy=-1;
         else if(keys.has('s')||keys.has('arrowdown'))dy=1;
         else if(keys.has('a')||keys.has('arrowleft'))dx=-1;
         else if(keys.has('d')||keys.has('arrowright'))dx=1;
         if(dx||dy){movePlayer(dx,dy);lastMoveRef.current=ts;}}
       const w=walkRef.current,tx=g.player.x,ty=g.player.y,ddx=tx-w.x,ddy=ty-w.y,dist=Math.sqrt(ddx*ddx+ddy*ddy);
-      if(dist>0.01){const step=Math.min(WS,dist);w.x+=ddx/dist*step;w.y+=ddy/dist*step;w.walkCycle+=0.18;w.moving=dist>WS*2;}
-      else{w.x=tx;w.y=ty;w.moving=false;}
+      // Apply queued move early — when within 25% of tile (smooth chain stepping)
+      if(w.queued&&dist<0.25&&!g.levelComplete&&!g.gameOver&&!g.codeEntry&&!g.cyberdeckEntry){
+        const{dx:qdx,dy:qdy}=w.queued;w.queued=null;movePlayer(qdx,qdy);}
+      if(dist>0.01){const step=Math.min(WS,dist);w.x+=ddx/dist*step;w.y+=ddy/dist*step;w.walkCycle+=0.22;w.moving=true;}
+      else{w.x=tx;w.y=ty;w.moving=false;w.walkCycle=0;}
       const tI=toIso(w.x,w.y);camRef.current.x+=(tI.x-camRef.current.x)*0.1;camRef.current.y+=(tI.y-camRef.current.y)*0.1;
       const rev=revealedRef.current;for(let gy2=0;gy2<MH;gy2++)for(let gx2=0;gx2<MW;gx2++){if(Math.sqrt((gx2-g.player.x)**2+(gy2-g.player.y)**2)<g.flashRadius)rev[gy2*MW+gx2]=1;}
       for(const bs of g.brokenServers){if(bs.fixed)continue;const col=g.useTools?TOOL_TYPES[bs.toolType]:USB_COLORS[bs.colorIndex];const iso=toIso(bs.x,bs.y);
@@ -860,10 +866,10 @@ function drawCyberdeck(ctx,W,H,g){const cd=g.cyberdeckEntry;if(!cd)return;
 
 /* ===== AGENT — sprite-based ===== */
 function drawAgent(ctx,x,y,ts,player,walk){
-  // Advance walk frame counter (8 frames, cycle at ~10fps)
   const FRAMES=8;
-  const isMoving=walk.moving||Math.abs(walk.x-player.x)>0.05||Math.abs(walk.y-player.y)>0.05;
-  const frame=isMoving?Math.floor((walk.walkCycle/0.18*0.14))%FRAMES:0;
+  const isMoving=walk.moving;
+  // walkCycle increments 0.22/frame while moving. Divide by ~1.76 → ~8 frames per tile
+  const frame=isMoving?Math.floor(walk.walkCycle/1.76*FRAMES)%FRAMES:0;
   const row=DIR_ROW[player.facing]??0;
 
   // Render drop shadow first
