@@ -211,8 +211,8 @@ export default function DataCenterMaze(){
       else if(dx===1)ce.cursor=Math.min(3,ce.cursor+1);
       setGs({...g});return;}
     const w=walkRef.current;
-    // While moving: queue this direction so it fires as soon as we reach the next tile
-    if(w.moving){w.queued={dx,dy};return;}
+    // Hard block while moving — next input accepted via distance threshold in game loop
+    if(w.moving)return;
     if(dx===-1&&dy===0)g.player.facing='nw';
     else if(dx===1&&dy===0)g.player.facing='se';
     else if(dx===0&&dy===-1)g.player.facing='ne';
@@ -294,16 +294,17 @@ export default function DataCenterMaze(){
   useEffect(()=>{if(!gs)return;let aid;
     const loop=(ts)=>{const g=gRef.current;if(!g){aid=requestAnimationFrame(loop);return;}
       const keys=keysRef.current;
-      if(!isMobile&&ts-lastMoveRef.current>16&&!g.won&&!g.levelComplete&&!g.gameOver){let dx=0,dy=0;
+      // Movement: accept input when idle OR within 0.3 tiles of target (smooth continuous walk)
+      const w=walkRef.current,tx=g.player.x,ty=g.player.y,ddx=tx-w.x,ddy=ty-w.y,dist=Math.sqrt(ddx*ddx+ddy*ddy);
+      const canMove=!g.won&&!g.levelComplete&&!g.gameOver&&!g.codeEntry&&!g.cyberdeckEntry;
+      if(!isMobile&&canMove&&(!w.moving||dist<0.3)){
+        let dx=0,dy=0;
         if(keys.has('w')||keys.has('arrowup'))dy=-1;
         else if(keys.has('s')||keys.has('arrowdown'))dy=1;
         else if(keys.has('a')||keys.has('arrowleft'))dx=-1;
         else if(keys.has('d')||keys.has('arrowright'))dx=1;
-        if(dx||dy){movePlayer(dx,dy);lastMoveRef.current=ts;}}
-      const w=walkRef.current,tx=g.player.x,ty=g.player.y,ddx=tx-w.x,ddy=ty-w.y,dist=Math.sqrt(ddx*ddx+ddy*ddy);
-      // Apply queued move early — when within 25% of tile (smooth chain stepping)
-      if(w.queued&&dist<0.25&&!g.levelComplete&&!g.gameOver&&!g.codeEntry&&!g.cyberdeckEntry){
-        const{dx:qdx,dy:qdy}=w.queued;w.queued=null;movePlayer(qdx,qdy);}
+        if(dx||dy)movePlayer(dx,dy);}
+      // Interpolate visual position toward logical tile
       if(dist>0.01){const step=Math.min(WS,dist);w.x+=ddx/dist*step;w.y+=ddy/dist*step;w.walkCycle+=0.22;w.moving=true;}
       else{w.x=tx;w.y=ty;w.moving=false;w.walkCycle=0;}
       const tI=toIso(w.x,w.y);camRef.current.x+=(tI.x-camRef.current.x)*0.1;camRef.current.y+=(tI.y-camRef.current.y)*0.1;
@@ -374,7 +375,7 @@ export default function DataCenterMaze(){
     for(let gy=0;gy<MH;gy++)for(let gx=0;gx<MW;gx++)tiles.push({gx,gy,d:gx+gy});tiles.sort((a,b)=>a.d-b.d);
     let pDrawn=false;
     for(const{gx,gy}of tiles){const td=gx+gy;
-      if(!pDrawn&&td>pD){drawAgent(ctx,pIso.x,pIso.y,ts,player,w);drawBeam(ctx,pIso.x,pIso.y,player,g);pDrawn=true;}
+      if(!pDrawn&&td>pD){drawAgent(ctx,pIso.x,pIso.y,ts,player,w);if(!SPRITE_READY)drawBeam(ctx,pIso.x,pIso.y,player,g);pDrawn=true;}
       const idx=gy*MW+gx,lit=litMap[idx],revealed=rev[idx]===1;if(!revealed&&lit<0.005)continue;
       const iso=toIso(gx,gy);const isGold=driveSet.has(idx);
       const cb=colorBiasMap[idx];
@@ -383,7 +384,7 @@ export default function DataCenterMaze(){
         const tool=toolMap.get(`${gx},${gy}`);if(tool)drawTool(ctx,iso.x,iso.y,tool.toolType,ts,revealed?Math.max(0.04,lit):lit);}
       else{const bsInfo=brokenMap.get(`${gx},${gy}`);
         drawRack(ctx,iso.x,iso.y,revealed?Math.max(0.06,lit):lit,ts,servers.find(s=>s.x===gx&&s.y===gy),gx,gy,isGold?ts:0,bsInfo,cb);}}
-    if(!pDrawn){drawAgent(ctx,pIso.x,pIso.y,ts,player,w);drawBeam(ctx,pIso.x,pIso.y,player,g);}
+    if(!pDrawn){drawAgent(ctx,pIso.x,pIso.y,ts,player,w);if(!SPRITE_READY)drawBeam(ctx,pIso.x,pIso.y,player,g);}
     for(const gd of g.guards){const gIso=toIso(gd.walkPos.x,gd.walkPos.y);const gLit=litMap[Math.round(gd.y)*MW+Math.round(gd.x)]||0;
       if(gLit>0.01||rev[Math.round(gd.y)*MW+Math.round(gd.x)])drawGuard(ctx,gIso.x,gIso.y,ts,gd,gLit);}
     // Sparks
@@ -868,28 +869,27 @@ function drawCyberdeck(ctx,W,H,g){const cd=g.cyberdeckEntry;if(!cd)return;
 function drawAgent(ctx,x,y,ts,player,walk){
   const FRAMES=8;
   const isMoving=walk.moving;
-  // walkCycle increments 0.22/frame while moving. Divide by ~1.76 → ~8 frames per tile
-  const frame=isMoving?Math.floor(walk.walkCycle/1.76*FRAMES)%FRAMES:0;
+  // Evenly step through 8 frames over one tile crossing
+  const frame=isMoving?Math.floor((walk.walkCycle/1.76)*FRAMES)%FRAMES:0;
   const row=DIR_ROW[player.facing]??0;
 
-  // Render drop shadow first
+  // Drop shadow
   ctx.save();
   ctx.beginPath();ctx.ellipse(x,y-2,18,7,0,0,Math.PI*2);
-  ctx.fillStyle='rgba(0,0,0,0.28)';ctx.fill();
+  ctx.fillStyle='rgba(0,0,0,0.3)';ctx.fill();
   ctx.restore();
 
   if(SPRITE_READY){
-    const sw=SPRITE_W,sh=SPRITE_H;
-    const sx=frame*sw, sy=row*sh;
-    // Draw sprite centered on isometric foot position
-    // Scale sprite to match game character size (~80px tall in game coords)
-    const scale=0.48;
-    const dw=sw*scale, dh=sh*scale;
+    // SPRITE_W=163, SPRITE_H=148
+    const sx=frame*SPRITE_W, sy=row*SPRITE_H;
+    // Scale so character stands ~90px tall on screen (fits isometric tile nicely)
+    const scale=0.52;
+    const dw=SPRITE_W*scale, dh=SPRITE_H*scale;
     ctx.save();
-    ctx.drawImage(_spriteImg, sx, sy, sw, sh, x-dw/2, y-dh+4, dw, dh);
+    // Anchor at foot center: x, y
+    ctx.drawImage(_spriteImg, sx, sy, SPRITE_W, SPRITE_H, x-dw/2, y-dh+6, dw, dh);
     ctx.restore();
   } else {
-    // Fallback: draw procedural agent if sprite not loaded yet
     _drawAgentFallback(ctx,x,y,ts,player,walk);
   }
 }
