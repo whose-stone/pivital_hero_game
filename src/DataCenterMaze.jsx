@@ -903,12 +903,12 @@ function drawAgent(ctx,x,y,ts,player,walk){
 
   // Soft ground shadow
   ctx.save();
-  ctx.beginPath();ctx.ellipse(x,y-2,20,7,0,0,Math.PI*2);
+  ctx.beginPath();ctx.ellipse(x,y-2,22,8,0,0,Math.PI*2);
   ctx.fillStyle='rgba(0,0,0,0.22)';ctx.fill();
   ctx.restore();
 
   if(SPRITE_READY){
-    // SPRITE_W=64, SPRITE_H=96 — scale so character is ~96px tall on screen
+    // SPRITE_W=80, SPRITE_H=112
     const scale=1.0;
     const dw=SPRITE_W*scale, dh=SPRITE_H*scale;
     ctx.save();
