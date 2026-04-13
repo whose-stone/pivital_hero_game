@@ -909,7 +909,7 @@ function drawAgent(ctx,x,y,ts,player,walk){
 
   if(SPRITE_READY){
     // SPRITE_W=80, SPRITE_H=112
-    const scale=1.0;
+    const scale=0.5;
     const dw=SPRITE_W*scale, dh=SPRITE_H*scale;
     ctx.save();
     ctx.drawImage(_spriteImg, frame*SPRITE_W, row*SPRITE_H, SPRITE_W, SPRITE_H,
