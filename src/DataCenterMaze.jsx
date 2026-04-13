@@ -120,6 +120,11 @@ export default function DataCenterMaze(){
   const canvasRef=useRef(null);const[gs,setGs]=useState(null);const[dims,setDims]=useState({w:1400,h:850});
   const[gamePhase,setGamePhase]=useState('splash');const splashStartRef=useRef(Date.now());
   const keysRef=useRef(new Set()),lastMoveRef=useRef(0),particlesRef=useRef([]),gRef=useRef(null);
+  // Movement: tap=1 tile, hold=continuous after 180ms
+  const pendingDirRef=useRef(null);   // current direction held {dx,dy}
+  const pendingNewRef=useRef(false);  // true = freshly pressed, not yet consumed
+  const continuousRef=useRef(false);  // true = held long enough for continuous walk
+  const holdTimerRef=useRef(null);    // setTimeout handle
   const walkRef=useRef({x:1,y:1,moving:false,walkCycle:0}),camRef=useRef({x:0,y:0});
   const revealedRef=useRef(new Uint8Array(MW*MH));
   const notifRef=useRef({text:'',timer:0});const sparksRef=useRef([]);const arcsRef=useRef([]);const dustRef=useRef([]);
@@ -275,9 +280,27 @@ export default function DataCenterMaze(){
     g.cyberdeckEntry={brokenIndex:g.atBrokenServer,colorIndex:bs.colorIndex,toolType:bs.toolType,hasMatch,useTools:g.useTools,phase:hasMatch?'running':'denied',timer:0};
     notifRef.current={text:'',timer:0};setGs({...g});},[]);
 
-  useEffect(()=>{const kd=(e)=>{const k=e.key.toLowerCase();keysRef.current.add(k);
+  useEffect(()=>{
+    const MOVE_DIRS={w:{dx:0,dy:-1},arrowup:{dx:0,dy:-1},s:{dx:0,dy:1},arrowdown:{dx:0,dy:1},a:{dx:-1,dy:0},arrowleft:{dx:-1,dy:0},d:{dx:1,dy:0},arrowright:{dx:1,dy:0}};
+    const kd=(e)=>{const k=e.key.toLowerCase();keysRef.current.add(k);
     if(['w','a','s','d','arrowup','arrowdown','arrowleft','arrowright','escape','enter','tab'].includes(k))e.preventDefault();
     if(gamePhase==='splash'){if(Date.now()-splashStartRef.current>1500){setGamePhase('playing');}return;}
+    // Movement direction: tap fires one tile, holding >180ms enables continuous walk
+    if(MOVE_DIRS[k]){
+      const dir=MOVE_DIRS[k];
+      const g=gRef.current;
+      // Handle code/initials entry navigation directly
+      if(g&&(g.codeEntry||g.cyberdeckEntry||(g.levelComplete&&g.showScoreEntry))){
+        movePlayer(dir.dx,dir.dy);
+      } else {
+        const cur=pendingDirRef.current;
+        if(!cur||cur.dx!==dir.dx||cur.dy!==dir.dy){
+          // New direction pressed — always counts as fresh tap
+          pendingDirRef.current=dir;
+          pendingNewRef.current=true;
+          continuousRef.current=false;
+          clearTimeout(holdTimerRef.current);
+          holdTimerRef.current=setTimeout(()=>{continuousRef.current=true;},180);}}}
     if(k==='escape')cancelCode();
     if(k==='enter'){const g=gRef.current;if(!g)return;
       if(g.levelComplete&&g.showScoreEntry)submitScore();
@@ -288,22 +311,28 @@ export default function DataCenterMaze(){
       else if(g.atDrive!==null)openCodeEntry();
       else if(g.atBrokenServer!==null)openCyberdeck();}
     if(k==='tab'){e.preventDefault();setShowScoreboard(p=>!p);}};
-    const ku=(e)=>{keysRef.current.delete(e.key.toLowerCase());};
-    window.addEventListener('keydown',kd);window.addEventListener('keyup',ku);return()=>{window.removeEventListener('keydown',kd);window.removeEventListener('keyup',ku);};},[cancelCode,submitCode,submitScore,openCodeEntry,openCyberdeck,startNextLevel,initGame,gamePhase]);
+    const ku=(e)=>{const k=e.key.toLowerCase();keysRef.current.delete(k);
+      // Clear direction on key release
+      if(MOVE_DIRS[k]){
+        const dir=MOVE_DIRS[k];
+        const cur=pendingDirRef.current;
+        if(cur&&cur.dx===dir.dx&&cur.dy===dir.dy){
+          pendingDirRef.current=null;pendingNewRef.current=false;
+          continuousRef.current=false;clearTimeout(holdTimerRef.current);}}};
+    window.addEventListener('keydown',kd);window.addEventListener('keyup',ku);
+    return()=>{window.removeEventListener('keydown',kd);window.removeEventListener('keyup',ku);clearTimeout(holdTimerRef.current);};},[cancelCode,submitCode,submitScore,openCodeEntry,openCyberdeck,startNextLevel,initGame,gamePhase,movePlayer]);
 
   useEffect(()=>{if(!gs)return;let aid;
     const loop=(ts)=>{const g=gRef.current;if(!g){aid=requestAnimationFrame(loop);return;}
       const keys=keysRef.current;
-      // Movement: accept input when idle OR within 0.3 tiles of target (smooth continuous walk)
+      // Movement: fire when idle AND (freshly pressed OR held >180ms)
       const w=walkRef.current,tx=g.player.x,ty=g.player.y,ddx=tx-w.x,ddy=ty-w.y,dist=Math.sqrt(ddx*ddx+ddy*ddy);
       const canMove=!g.won&&!g.levelComplete&&!g.gameOver&&!g.codeEntry&&!g.cyberdeckEntry;
-      if(!isMobile&&canMove&&(!w.moving||dist<0.3)){
-        let dx=0,dy=0;
-        if(keys.has('w')||keys.has('arrowup'))dy=-1;
-        else if(keys.has('s')||keys.has('arrowdown'))dy=1;
-        else if(keys.has('a')||keys.has('arrowleft'))dx=-1;
-        else if(keys.has('d')||keys.has('arrowright'))dx=1;
-        if(dx||dy)movePlayer(dx,dy);}
+      if(!isMobile&&canMove&&!w.moving&&pendingDirRef.current){
+        if(pendingNewRef.current||continuousRef.current){
+          const{dx,dy}=pendingDirRef.current;
+          movePlayer(dx,dy);
+          pendingNewRef.current=false;}}
       // Interpolate visual position toward logical tile
       if(dist>0.01){const step=Math.min(WS,dist);w.x+=ddx/dist*step;w.y+=ddy/dist*step;w.walkCycle+=0.22;w.moving=true;}
       else{w.x=tx;w.y=ty;w.moving=false;w.walkCycle=0;}
