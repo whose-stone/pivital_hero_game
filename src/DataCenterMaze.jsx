@@ -869,25 +869,22 @@ function drawCyberdeck(ctx,W,H,g){const cd=g.cyberdeckEntry;if(!cd)return;
 function drawAgent(ctx,x,y,ts,player,walk){
   const FRAMES=8;
   const isMoving=walk.moving;
-  // Evenly step through 8 frames over one tile crossing
   const frame=isMoving?Math.floor((walk.walkCycle/1.76)*FRAMES)%FRAMES:0;
   const row=DIR_ROW[player.facing]??0;
 
   // Drop shadow
   ctx.save();
-  ctx.beginPath();ctx.ellipse(x,y-2,18,7,0,0,Math.PI*2);
-  ctx.fillStyle='rgba(0,0,0,0.3)';ctx.fill();
+  ctx.beginPath();ctx.ellipse(x,y-2,16,6,0,0,Math.PI*2);
+  ctx.fillStyle='rgba(0,0,0,0.25)';ctx.fill();
   ctx.restore();
 
   if(SPRITE_READY){
-    // SPRITE_W=163, SPRITE_H=148
-    const sx=frame*SPRITE_W, sy=row*SPRITE_H;
-    // Scale so character stands ~90px tall on screen (fits isometric tile nicely)
-    const scale=0.52;
+    // SPRITE_W=64, SPRITE_H=80 — scale so character is ~80px tall on screen
+    const scale=1.0;
     const dw=SPRITE_W*scale, dh=SPRITE_H*scale;
     ctx.save();
-    // Anchor at foot center: x, y
-    ctx.drawImage(_spriteImg, sx, sy, SPRITE_W, SPRITE_H, x-dw/2, y-dh+6, dw, dh);
+    ctx.drawImage(_spriteImg, frame*SPRITE_W, row*SPRITE_H, SPRITE_W, SPRITE_H,
+                  x-dw/2, y-dh+8, dw, dh);
     ctx.restore();
   } else {
     _drawAgentFallback(ctx,x,y,ts,player,walk);
