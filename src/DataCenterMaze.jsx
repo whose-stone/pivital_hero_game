@@ -901,14 +901,14 @@ function drawAgent(ctx,x,y,ts,player,walk){
   const frame=isMoving?Math.floor((walk.walkCycle/1.76)*FRAMES)%FRAMES:0;
   const row=DIR_ROW[player.facing]??0;
 
-  // Drop shadow
+  // Soft ground shadow
   ctx.save();
-  ctx.beginPath();ctx.ellipse(x,y-2,16,6,0,0,Math.PI*2);
-  ctx.fillStyle='rgba(0,0,0,0.25)';ctx.fill();
+  ctx.beginPath();ctx.ellipse(x,y-2,20,7,0,0,Math.PI*2);
+  ctx.fillStyle='rgba(0,0,0,0.22)';ctx.fill();
   ctx.restore();
 
   if(SPRITE_READY){
-    // SPRITE_W=64, SPRITE_H=80 — scale so character is ~80px tall on screen
+    // SPRITE_W=64, SPRITE_H=96 — scale so character is ~96px tall on screen
     const scale=1.0;
     const dw=SPRITE_W*scale, dh=SPRITE_H*scale;
     ctx.save();
