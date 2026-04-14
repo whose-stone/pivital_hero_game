@@ -1,12 +1,29 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { submitScoreToFirebase, fetchTopScores, fetchLevelScores } from "./firebase";
-import { SPRITE_SRC, SPRITE_W, SPRITE_H, SPRITE_COLS, DIR_ROW } from "./spriteData";
+import { CHAR0_SRC, CHAR0_W, CHAR0_H, CHAR1_SRC, CHAR1_W, CHAR1_H, SPRITE_COLS, DIR_ROW } from "./spriteData";
+import { GUARD_SPRITE_SRC, GUARD_W, GUARD_H, GUARD_COLS, GUARD_DIR_ROW } from "./guardData";
 
-// Pre-load sprite image once
-const _spriteImg = new Image();
-_spriteImg.src = SPRITE_SRC;
+// Pre-load all sprite images at module level
+const _charImgs = [new Image(), new Image()];
+_charImgs[0].src = CHAR0_SRC;
+_charImgs[1].src = CHAR1_SRC;
+const _charW = [CHAR0_W, CHAR1_W];
+const _charH = [CHAR0_H, CHAR1_H];
+const _charReady = [false, false];
+_charImgs[0].onload = () => { _charReady[0] = true; };
+_charImgs[1].onload = () => { _charReady[1] = true; };
+
+// Guard sprite
+const _guardImg = new Image();
+_guardImg.src = GUARD_SPRITE_SRC;
+let GUARD_READY = false;
+_guardImg.onload = () => { GUARD_READY = true; };
+
+// Legacy aliases for existing code
+const _spriteImg = _charImgs[0];
 let SPRITE_READY = false;
-_spriteImg.onload = () => { SPRITE_READY = true; };
+_charImgs[0].onload = () => { _charReady[0] = true; SPRITE_READY = true; };
+const SPRITE_W = CHAR0_W, SPRITE_H = CHAR0_H;
 
 const TW=96,TH=48,MW=31,MH=31,WS=0.10,RH=60,NUM_DRIVES=4,FRAGS_PER=4;
 // Walk: 0.10 tiles/frame = ~10 frames to cross 1 tile at 60fps = ~165ms per tile
@@ -119,6 +136,8 @@ function computeColorBias(gx,gy,g){
 export default function DataCenterMaze(){
   const canvasRef=useRef(null);const[gs,setGs]=useState(null);const[dims,setDims]=useState({w:1400,h:850});
   const[gamePhase,setGamePhase]=useState('splash');const splashStartRef=useRef(Date.now());
+  const[selectedChar,setSelectedChar]=useState(0);  // 0=bearded, 1=professor
+  const selectedCharRef=useRef(0);
   const keysRef=useRef(new Set()),lastMoveRef=useRef(0),particlesRef=useRef([]),gRef=useRef(null);
   // Movement: tap=1 tile, hold=continuous after 180ms
   const pendingDirRef=useRef(null);   // current direction held {dx,dy}
@@ -149,7 +168,7 @@ export default function DataCenterMaze(){
     else setDims({w:Math.min(1400,Math.floor(vw*0.96)),h:Math.min(850,Math.floor(vh*0.88))});};
     r();window.addEventListener('resize',r);return()=>window.removeEventListener('resize',r);},[]);
 
-  const initGame=useCallback((level=1)=>{
+  const initGame=useCallback((level=1,charIdx=0)=>{
     const maze=genMaze(MW,MH);const player={x:1,y:1,dir:{x:1,y:0},facing:'se'};
     const types=['tall','wide','blade','network','storage'];const servers=[];
     for(let y=0;y<MH;y++)for(let x=0;x<MW;x++){if(maze[y][x]===1){let adj=false;[[0,-1],[0,1],[-1,0],[1,0]].forEach(([dx,dy])=>{const n2=x+dx,m2=y+dy;if(n2>=0&&n2<MW&&m2>=0&&m2<MH&&maze[m2][n2]===0)adj=true;});
@@ -179,25 +198,25 @@ export default function DataCenterMaze(){
       for(let gi=0;gi<guardCount;gi++){const gSpots=placeOnFloor(maze,1,avoidList.concat([{x:player.x,y:player.y}]));
         if(gSpots.length>0){avoidList.push(...gSpots);
           const patrolPts=placeOnFloor(maze,4,[gSpots[0]]);
-          guards.push({x:gSpots[0].x,y:gSpots[0].y,walkPos:{x:gSpots[0].x,y:gSpots[0].y},dir:{x:0,y:1},patrol:[gSpots[0],...patrolPts],patrolIdx:0,moveTimer:0,sightRange,alertTimer:0});}}}
+          guards.push({x:gSpots[0].x,y:gSpots[0].y,walkPos:{x:gSpots[0].x,y:gSpots[0].y},dir:{x:0,y:1},facing:'sw',walkCycle:0,patrol:[gSpots[0],...patrolPts],patrolIdx:0,moveTimer:0,sightRange,alertTimer:0});}}}
     const parTime=120+(level-1)*30;
     walkRef.current={x:1,y:1,moving:false,walkCycle:0,queued:null};revealedRef.current=new Uint8Array(MW*MH);
     sparksRef.current=[];arcsRef.current=[];dustRef.current=[];notifRef.current={text:'',timer:0};setShowPhone(false);
     const p=toIso(1,1);camRef.current={x:p.x,y:p.y};
-    const g={maze,player,drives,brokenServers,servers,score:0,totalDrives:numDrives,won:false,levelComplete:false,gameOver:false,gameOverReason:null,level,flashRadius:12,fragments:[],codeEntry:null,atDrive:null,usbSticks,tools,guards,usbInventory:[],collectedTools:[],atBrokenServer:null,cyberdeckEntry:null,levelColor,useTools,startTime:Date.now(),parTime,elapsed:0,levelScore:0,showScoreEntry:false,scoreInitials:['A','A','A'],scoreCursor:0};
+    const g={maze,player,drives,brokenServers,servers,score:0,totalDrives:numDrives,won:false,levelComplete:false,gameOver:false,gameOverReason:null,level,charIdx,flashRadius:12,fragments:[],codeEntry:null,atDrive:null,usbSticks,tools,guards,usbInventory:[],collectedTools:[],atBrokenServer:null,cyberdeckEntry:null,levelColor,useTools,startTime:Date.now(),parTime,elapsed:0,levelScore:0,showScoreEntry:false,scoreInitials:['A','A','A'],scoreCursor:0};
     gRef.current=g;setGs({...g});},[]);
 
   useEffect(()=>{if(gamePhase!=='splash')return;let aid;
     const splashLoop=(ts)=>{const cv=canvasRef.current;if(!cv){aid=requestAnimationFrame(splashLoop);return;}
-      drawSplash(cv.getContext('2d'),cv.width,cv.height,ts,Date.now()-splashStartRef.current);
+      drawSplash(cv.getContext('2d'),cv.width,cv.height,ts,Date.now()-splashStartRef.current,selectedChar);
       aid=requestAnimationFrame(splashLoop);};
     aid=requestAnimationFrame(splashLoop);
-    const dismiss=()=>{if(Date.now()-splashStartRef.current>1500)setGamePhase('playing');};
+    const dismiss=()=>{if(Date.now()-splashStartRef.current>1500){initGame(1,selectedCharRef.current);setGamePhase('playing');}};
     window.addEventListener('click',dismiss);window.addEventListener('touchstart',dismiss);
-    return()=>{cancelAnimationFrame(aid);window.removeEventListener('click',dismiss);window.removeEventListener('touchstart',dismiss);};},[gamePhase]);
+    return()=>{cancelAnimationFrame(aid);window.removeEventListener('click',dismiss);window.removeEventListener('touchstart',dismiss);};},[gamePhase,selectedChar,initGame]);
 
-  useEffect(()=>{if(gamePhase==='playing'&&!gRef.current)initGame();},[initGame,gamePhase]);
-  const startNextLevel=useCallback(()=>{const g=gRef.current;if(g)initGame(g.level+1);},[initGame]);
+  useEffect(()=>{if(gamePhase==='playing'&&!gRef.current)initGame(1,selectedCharRef.current);},[initGame,gamePhase]);
+  const startNextLevel=useCallback(()=>{const g=gRef.current;if(g)initGame(g.level+1,g.charIdx||0);},[initGame]);
 
   const movePlayer=useCallback((dx,dy)=>{
     const g=gRef.current;if(!g||g.won||g.gameOver)return;
@@ -284,7 +303,10 @@ export default function DataCenterMaze(){
     const MOVE_DIRS={w:{dx:0,dy:-1},arrowup:{dx:0,dy:-1},s:{dx:0,dy:1},arrowdown:{dx:0,dy:1},a:{dx:-1,dy:0},arrowleft:{dx:-1,dy:0},d:{dx:1,dy:0},arrowright:{dx:1,dy:0}};
     const kd=(e)=>{const k=e.key.toLowerCase();keysRef.current.add(k);
     if(['w','a','s','d','arrowup','arrowdown','arrowleft','arrowright','escape','enter','tab'].includes(k))e.preventDefault();
-    if(gamePhase==='splash'){if(Date.now()-splashStartRef.current>1500){setGamePhase('playing');}return;}
+    if(gamePhase==='splash'){if(Date.now()-splashStartRef.current>1500){
+      if(k==='a'||k==='arrowleft'){selectedCharRef.current=0;setSelectedChar(0);}
+      else if(k==='d'||k==='arrowright'){selectedCharRef.current=1;setSelectedChar(1);}
+      else{initGame(1,selectedCharRef.current);setGamePhase('playing');}}return;}
     // Movement direction: tap fires one tile, holding >180ms enables continuous walk
     if(MOVE_DIRS[k]){
       const dir=MOVE_DIRS[k];
@@ -372,7 +394,21 @@ export default function DataCenterMaze(){
           gd.x=nx2;gd.y=ny2;if(gdx||gdy)gd.dir={x:gdx||gd.dir.x,y:gdy||gd.dir.y};
           if(Math.abs(gd.x-tgt.x)<=1&&Math.abs(gd.y-tgt.y)<=1)gd.patrolIdx=(gd.patrolIdx+1)%gd.patrol.length;}
         const wdx=gd.x-gd.walkPos.x,wdy=gd.y-gd.walkPos.y;
+        const gdist=Math.sqrt(wdx*wdx+wdy*wdy);
         gd.walkPos.x+=wdx*0.08;gd.walkPos.y+=wdy*0.08;
+        // Advance walk cycle when moving
+        if(gdist>0.05){gd.walkCycle=(gd.walkCycle||0)+0.20;}
+        else{gd.walkCycle=0;}
+        // Map dir to facing string
+        const dx2=gd.dir.x,dy2=gd.dir.y;
+        if(dx2===1&&dy2===0)gd.facing='se';
+        else if(dx2===-1&&dy2===0)gd.facing='nw';
+        else if(dx2===0&&dy2===1)gd.facing='sw';
+        else if(dx2===0&&dy2===-1)gd.facing='ne';
+        else if(dx2===1)gd.facing='se';
+        else if(dx2===-1)gd.facing='nw';
+        else if(dy2===1)gd.facing='sw';
+        else gd.facing='ne';
         const px2=g.player.x,py2=g.player.y,dist2=Math.sqrt((px2-gd.x)**2+(py2-gd.y)**2);
         if(dist2<=gd.sightRange){let blocked=false;
           const steps=Math.ceil(dist2*2);
@@ -404,7 +440,7 @@ export default function DataCenterMaze(){
     for(let gy=0;gy<MH;gy++)for(let gx=0;gx<MW;gx++)tiles.push({gx,gy,d:gx+gy});tiles.sort((a,b)=>a.d-b.d);
     let pDrawn=false;
     for(const{gx,gy}of tiles){const td=gx+gy;
-      if(!pDrawn&&td>pD){drawAgent(ctx,pIso.x,pIso.y,ts,player,w);if(!SPRITE_READY)drawBeam(ctx,pIso.x,pIso.y,player,g);pDrawn=true;}
+      if(!pDrawn&&td>pD){drawAgent(ctx,pIso.x,pIso.y,ts,player,w,g.charIdx||0);if(!_charReady[g.charIdx||0])drawBeam(ctx,pIso.x,pIso.y,player,g);pDrawn=true;}
       const idx=gy*MW+gx,lit=litMap[idx],revealed=rev[idx]===1;if(!revealed&&lit<0.005)continue;
       const iso=toIso(gx,gy);const isGold=driveSet.has(idx);
       const cb=colorBiasMap[idx];
@@ -413,7 +449,7 @@ export default function DataCenterMaze(){
         const tool=toolMap.get(`${gx},${gy}`);if(tool)drawTool(ctx,iso.x,iso.y,tool.toolType,ts,revealed?Math.max(0.04,lit):lit);}
       else{const bsInfo=brokenMap.get(`${gx},${gy}`);
         drawRack(ctx,iso.x,iso.y,revealed?Math.max(0.06,lit):lit,ts,servers.find(s=>s.x===gx&&s.y===gy),gx,gy,isGold?ts:0,bsInfo,cb);}}
-    if(!pDrawn){drawAgent(ctx,pIso.x,pIso.y,ts,player,w);if(!SPRITE_READY)drawBeam(ctx,pIso.x,pIso.y,player,g);}
+    if(!pDrawn){drawAgent(ctx,pIso.x,pIso.y,ts,player,w,g.charIdx||0);if(!_charReady[g.charIdx||0])drawBeam(ctx,pIso.x,pIso.y,player,g);}
     for(const gd of g.guards){const gIso=toIso(gd.walkPos.x,gd.walkPos.y);const gLit=litMap[Math.round(gd.y)*MW+Math.round(gd.x)]||0;
       if(gLit>0.01||rev[Math.round(gd.y)*MW+Math.round(gd.x)])drawGuard(ctx,gIso.x,gIso.y,ts,gd,gLit);}
     // Sparks
@@ -490,7 +526,35 @@ export default function DataCenterMaze(){
         </div>))}
     </div>):null;
 
-  const startFromLevel=(level)=>{setShowLevelSelect(false);setGamePhase('playing');initGame(level);};
+  const startFromLevel=(level)=>{setShowLevelSelect(false);setGamePhase('playing');initGame(level,selectedCharRef.current);};
+
+  // Character selection overlay (shows during splash after boot)
+  const charSelectUI=gamePhase==='splash'?(
+    <div style={{position:'absolute',bottom:isMobile?60:80,left:0,right:0,display:'flex',flexDirection:'column',alignItems:'center',gap:10,zIndex:10,pointerEvents:'auto'}}>
+      <div style={{color:'rgba(170,102,255,0.8)',fontSize:isMobile?9:11,fontFamily:'"JetBrains Mono",monospace',letterSpacing:3,textTransform:'uppercase'}}>Select Character</div>
+      <div style={{display:'flex',gap:20,alignItems:'center'}}>
+        {[
+          {label:'Operator',desc:'Bearded · Plaid Shirt'},
+          {label:'Analyst', desc:'Tweed Jacket · Professor'},
+        ].map((ch,i)=>(
+          <button key={i} onClick={(e)=>{e.stopPropagation();selectedCharRef.current=i;setSelectedChar(i);}}
+            style={{
+              background:selectedChar===i?'rgba(170,102,255,0.18)':'rgba(10,8,20,0.6)',
+              border:`2px solid ${selectedChar===i?'#aa66ff':'rgba(80,40,120,0.4)'}`,
+              borderRadius:8,padding:'8px 14px',cursor:'pointer',fontFamily:'"JetBrains Mono",monospace',
+              display:'flex',flexDirection:'column',alignItems:'center',gap:4,
+              boxShadow:selectedChar===i?'0 0 14px rgba(170,102,255,0.4)':'none',
+              transition:'all 0.15s',minWidth:110,
+            }}>
+            <div style={{fontSize:isMobile?11:14,fontWeight:'bold',color:selectedChar===i?'#cc88ff':'#8866aa'}}>{ch.label}</div>
+            <div style={{fontSize:isMobile?8:9,color:'rgba(170,102,255,0.55)',whiteSpace:'nowrap'}}>{ch.desc}</div>
+            {selectedChar===i&&<div style={{fontSize:8,color:'#aa66ff',marginTop:2}}>▶ SELECTED</div>}
+          </button>
+        ))}
+      </div>
+      <div style={{color:'rgba(80,40,120,0.6)',fontSize:8,fontFamily:'monospace',letterSpacing:1}}>◀▶ to switch · any key to start</div>
+    </div>
+  ):null;
   const levelSelectOverlay=gamePhase==='splash'?(
     <div style={{position:'absolute',bottom:12,left:0,right:0,display:'flex',flexDirection:'column',alignItems:'center',zIndex:10,pointerEvents:'none'}}>
       {showLevelSelect&&(
@@ -612,6 +676,7 @@ export default function DataCenterMaze(){
       </GBCFrame>
 
       {levelSelectOverlay}
+      {charSelectUI}
       {phoneUI}
       {scoreboardUI}
 
@@ -647,7 +712,7 @@ export default function DataCenterMaze(){
 }
 
 /* ===== GBC-STYLE SPLASH ===== */
-function drawSplash(ctx,W,H,ts,elapsed){
+function drawSplash(ctx,W,H,ts,elapsed,selChar=0){
   ctx.fillStyle='#020408';ctx.fillRect(0,0,W,H);
   const cx=W/2,cy=H/2;const t=elapsed/1000;
   // GBC-tinted scanlines
@@ -895,7 +960,7 @@ function drawCyberdeck(ctx,W,H,g){const cd=g.cyberdeckEntry;if(!cd)return;
   ctx.textAlign='left';}
 
 /* ===== AGENT — sprite-based ===== */
-function drawAgent(ctx,x,y,ts,player,walk){
+function drawAgent(ctx,x,y,ts,player,walk,charIdx=0){
   const FRAMES=8;
   const isMoving=walk.moving;
   const frame=isMoving?Math.floor((walk.walkCycle/1.76)*FRAMES)%FRAMES:0;
@@ -907,12 +972,13 @@ function drawAgent(ctx,x,y,ts,player,walk){
   ctx.fillStyle='rgba(0,0,0,0.22)';ctx.fill();
   ctx.restore();
 
-  if(SPRITE_READY){
-    // SPRITE_W=80, SPRITE_H=112
+  const ci=charIdx||0;
+  if(_charReady[ci]){
+    const sw=_charW[ci], sh=_charH[ci];
     const scale=0.5;
-    const dw=SPRITE_W*scale, dh=SPRITE_H*scale;
+    const dw=sw*scale, dh=sh*scale;
     ctx.save();
-    ctx.drawImage(_spriteImg, frame*SPRITE_W, row*SPRITE_H, SPRITE_W, SPRITE_H,
+    ctx.drawImage(_charImgs[ci], frame*sw, row*sh, sw, sh,
                   x-dw/2, y-dh+8, dw, dh);
     ctx.restore();
   } else {
@@ -980,24 +1046,43 @@ function _drawAgentFallback(ctx,x,y,ts,player,walk){ctx.save();const f=player.fa
   ctx.restore();}
 
 function drawGuard(ctx,x,y,ts,gd,br){ctx.save();
-  const footY=y-2,py=footY-35;ctx.globalAlpha=Math.min(1,br+0.1);
-  ctx.beginPath();ctx.ellipse(x,footY+4,10,4,0,0,Math.PI*2);ctx.fillStyle='rgba(0,0,0,0.2)';ctx.fill();
-  ctx.strokeStyle='#1a1a2a';ctx.lineWidth=3;ctx.lineCap='round';
-  ctx.beginPath();ctx.moveTo(x-3,py+25);ctx.lineTo(x-3,footY+1);ctx.stroke();
-  ctx.beginPath();ctx.moveTo(x+3,py+25);ctx.lineTo(x+3,footY+1);ctx.stroke();
-  ctx.fillStyle='#1a1a30';ctx.fillRect(x-7,py+8,14,18);
-  ctx.fillStyle='#222240';ctx.fillRect(x-8,py+8,16,5);
-  ctx.beginPath();ctx.ellipse(x,py+2,5,6,0,0,Math.PI*2);ctx.fillStyle='#b89878';ctx.fill();
-  ctx.beginPath();ctx.ellipse(x,py-2,5.5,3.5,0,Math.PI*0.85,Math.PI*2.15);ctx.fillStyle='#1a1a30';ctx.fill();
+  ctx.globalAlpha=Math.min(1,br+0.1);
+  // Ground shadow
+  ctx.beginPath();ctx.ellipse(x,y-2,22,8,0,0,Math.PI*2);
+  ctx.fillStyle='rgba(0,0,0,0.22)';ctx.fill();
+
+  if(GUARD_READY){
+    const FRAMES=8;
+    const isMoving=(gd.walkCycle||0)>0;
+    const frame=isMoving?Math.floor(((gd.walkCycle||0)/1.76)*FRAMES)%FRAMES:0;
+    const row=GUARD_DIR_ROW[gd.facing||'sw']??2;
+    const scale=0.5;
+    const dw=GUARD_W*scale, dh=GUARD_H*scale;
+    ctx.drawImage(_guardImg, frame*GUARD_W, row*GUARD_H, GUARD_W, GUARD_H,
+                  x-dw/2, y-dh+8, dw, dh);
+  } else {
+    // Fallback: simple procedural guard
+    const footY=y-2,py=footY-35;
+    ctx.strokeStyle='#1a1a2a';ctx.lineWidth=3;ctx.lineCap='round';
+    ctx.beginPath();ctx.moveTo(x-3,py+25);ctx.lineTo(x-3,footY+1);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(x+3,py+25);ctx.lineTo(x+3,footY+1);ctx.stroke();
+    ctx.fillStyle='#1a1a30';ctx.fillRect(x-7,py+8,14,18);
+    ctx.fillStyle='#222240';ctx.fillRect(x-8,py+8,16,5);
+    ctx.beginPath();ctx.ellipse(x,py+2,5,6,0,0,Math.PI*2);ctx.fillStyle='#b89878';ctx.fill();
+    ctx.beginPath();ctx.ellipse(x,py-2,5.5,3.5,0,Math.PI*0.85,Math.PI*2.15);ctx.fillStyle='#1a1a30';ctx.fill();
+  }
+
+  // Red sight-range cone (always visible)
   const bAng=Math.atan2(gd.dir.y,gd.dir.x);const bLen=gd.sightRange*TW*0.15;
-  const bx=x+Math.cos(bAng)*5,by=py+10+Math.sin(bAng)*5;
+  const bx=x+Math.cos(bAng)*5,by=y-40+Math.sin(bAng)*5;
   const bex=bx+Math.cos(bAng)*bLen,bey=by+Math.sin(bAng)*bLen;
   ctx.globalAlpha=0.15*br;ctx.beginPath();ctx.moveTo(bx,by);
   ctx.lineTo(bex-Math.sin(bAng)*bLen*0.3,bey+Math.cos(bAng)*bLen*0.3);
   ctx.lineTo(bex+Math.sin(bAng)*bLen*0.3,bey-Math.cos(bAng)*bLen*0.3);ctx.closePath();
   ctx.fillStyle='rgba(255,40,40,0.4)';ctx.fill();
+  // Flashing red LED on cap
   const flash=Math.sin(ts/200)>0?0.8:0.3;ctx.globalAlpha=flash;ctx.fillStyle='#ff2222';
-  ctx.beginPath();ctx.arc(x,py-3,1.5,0,Math.PI*2);ctx.fill();
+  ctx.beginPath();ctx.arc(x,y-55,1.5,0,Math.PI*2);ctx.fill();
   ctx.globalAlpha=1;ctx.restore();}
 
 function drawBeam(ctx,px,py,player,g){ctx.save();const fd=player.dir;
