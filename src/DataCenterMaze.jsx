@@ -1,7 +1,40 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { submitScoreToFirebase, fetchTopScores, fetchLevelScores } from "./firebase";
+import { CHAR0_SRC, CHAR0_W, CHAR0_H, CHAR1_SRC, CHAR1_W, CHAR1_H, SPRITE_COLS, DIR_ROW } from "./spriteData";
+import { GUARD_SPRITE_SRC, GUARD_W, GUARD_H, GUARD_COLS, GUARD_DIR_ROW } from "./guardData";
 
-const TW=96,TH=48,MW=31,MH=31,WS=0.06,RH=60,NUM_DRIVES=4,FRAGS_PER=4;
+// Pre-load all sprite images at module level
+const _charImgs = [new Image(), new Image()];
+_charImgs[0].src = CHAR0_SRC;
+_charImgs[1].src = CHAR1_SRC;
+const _charW = [CHAR0_W, CHAR1_W];
+const _charH = [CHAR0_H, CHAR1_H];
+const _charReady = [false, false];
+_charImgs[0].onload = () => { _charReady[0] = true; };
+_charImgs[1].onload = () => { _charReady[1] = true; };
+
+// Guard sprite
+const _guardImg = new Image();
+_guardImg.src = GUARD_SPRITE_SRC;
+let GUARD_READY = false;
+_guardImg.onload = () => { GUARD_READY = true; };
+
+// Legacy aliases for existing code
+const _spriteImg = _charImgs[0];
+let SPRITE_READY = false;
+_charImgs[0].onload = () => { _charReady[0] = true; SPRITE_READY = true; };
+const SPRITE_W = CHAR0_W, SPRITE_H = CHAR0_H;
+
+const TW=96,TH=48,MW=31,MH=31,WS=0.10,RH=60,NUM_DRIVES=4,FRAGS_PER=4;
+// Walk: 0.10 tiles/frame = ~10 frames to cross 1 tile at 60fps = ~165ms per tile
+
+// GBC-era palette constants
+const GBC_DARK='#020408';
+const GBC_FRAME_PRIMARY='#9030b8';
+const GBC_FRAME_SECONDARY='#6818a0';
+const GBC_SCREEN_BORDER='#1a4870';
+const GBC_BEZEL='#0a0d18';
+
 const USB_COLORS=[
   {name:'red',hex:'#ff2244',led:'#ff4466',r:255,g:34,b:68},
   {name:'blue',hex:'#2266ff',led:'#4488ff',r:34,g:102,b:255},
@@ -14,28 +47,38 @@ const TOOL_TYPES=[
   {name:'Firmware Key',hex:'#aa33ff',r:170,g:51,b:255},
   {name:'Coolant Pack',hex:'#33ffaa',r:51,g:255,b:170},
 ];
+
+// 4x4 Bayer matrix for ordered dithering
+const BAYER=[[ 0, 8, 2,10],[12, 4,14, 6],[ 3,11, 1, 9],[15, 7,13, 5]];
+
 function genMaze(w,h){const m=Array.from({length:h},()=>Array(w).fill(1));const d=[[0,-2],[0,2],[-2,0],[2,0]];
   function sh(a){for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a;}
   function c(x,y){m[y][x]=0;for(const[dx,dy]of sh([...d])){const nx=x+dx,ny=y+dy;if(nx>0&&nx<w-1&&ny>0&&ny<h-1&&m[ny][nx]===1){m[y+dy/2][x+dx/2]=0;c(nx,ny);}}}
   c(1,1);for(let i=0;i<w*h*0.12;i++){const rx=1+Math.floor(Math.random()*(w-2)),ry=1+Math.floor(Math.random()*(h-2));
     if(m[ry][rx]===1){let a=0;if(ry>0&&m[ry-1][rx]===0)a++;if(ry<h-1&&m[ry+1][rx]===0)a++;if(rx>0&&m[ry][rx-1]===0)a++;if(rx<w-1&&m[ry][rx+1]===0)a++;if(a>=2)m[ry][rx]=0;}}return m;}
+
 function placeOnFloor(maze,count,avoid){const items=[],av=new Set(avoid.map(p=>`${p.x},${p.y}`));let a=0;
   while(items.length<count&&a<3000){const x=1+Math.floor(Math.random()*(MW-2)),y=1+Math.floor(Math.random()*(MH-2));
     if(maze[y][x]===0&&!av.has(`${x},${y}`)){items.push({x,y});av.add(`${x},${y}`);}a++;}return items;}
+
 function placeOnWall(maze,count,avoid){const items=[],av=new Set(avoid.map(p=>`${p.x},${p.y}`));let a=0;
   while(items.length<count&&a<5000){const x=1+Math.floor(Math.random()*(MW-2)),y=1+Math.floor(Math.random()*(MH-2));
     if(maze[y][x]===1&&!av.has(`${x},${y}`)){const adjs=[[0,-1],[0,1],[-1,0],[1,0]];
       const floorAdj=adjs.map(([dx,dy])=>({x:x+dx,y:y+dy})).filter(p=>p.x>=0&&p.x<MW&&p.y>=0&&p.y<MH&&maze[p.y][p.x]===0&&!av.has(`${p.x},${p.y}`));
       if(floorAdj.length>0){const adj=floorAdj[Math.floor(Math.random()*floorAdj.length)];items.push({x,y,adjX:adj.x,adjY:adj.y});av.add(`${x},${y}`);av.add(`${adj.x},${adj.y}`);}}a++;}return items;}
+
 function toIso(gx,gy){return{x:(gx-gy)*TW/2,y:(gx+gy)*TH/2};}
 function tR(x,y,s){let h=x*374761393+y*668265263+s*1274126177;h=(h^(h>>13))*1103515245;return((h^(h>>16))&0x7fffffff)/0x7fffffff;}
+
 function useIsMobile(){const[m,s]=useState(false);useEffect(()=>{const c=()=>s(('ontouchstart' in window||navigator.maxTouchPoints>0)&&window.innerWidth<768);c();window.addEventListener('resize',c);return()=>window.removeEventListener('resize',c);},[]);return m;}
+
 function DPadBtn({icon,onPress,size}){const iRef=useRef(null),pRef=useRef(false);
   const go=(e)=>{e.preventDefault();if(pRef.current)return;pRef.current=true;onPress();iRef.current=setInterval(onPress,120);};
   const stop=(e)=>{if(e)e.preventDefault();pRef.current=false;if(iRef.current){clearInterval(iRef.current);iRef.current=null;}};
   useEffect(()=>()=>{if(iRef.current)clearInterval(iRef.current);},[]);
   return <button onTouchStart={go} onTouchEnd={stop} onTouchCancel={stop} onMouseDown={go} onMouseUp={stop} onMouseLeave={stop}
     style={{width:size,height:size,borderRadius:8,background:'rgba(0,170,255,0.08)',border:'1.5px solid rgba(0,170,255,0.25)',color:'rgba(0,220,255,0.8)',fontSize:18,fontFamily:'monospace',display:'flex',alignItems:'center',justifyContent:'center',touchAction:'manipulation',userSelect:'none',WebkitUserSelect:'none',cursor:'pointer',padding:0}}>{icon}</button>;}
+
 function CrossDPad({onMove,size}){const s=size||46,g=3;
   return <div style={{display:'grid',gridTemplateColumns:`${s}px ${s}px ${s}px`,gridTemplateRows:`${s}px ${s}px ${s}px`,gap:g,flexShrink:0}}>
     <div/><DPadBtn icon="▲" size={s} onPress={()=>onMove(0,-1)}/><div/>
@@ -45,10 +88,62 @@ function CrossDPad({onMove,size}){const s=size||46,g=3;
     <div/><DPadBtn icon="▼" size={s} onPress={()=>onMove(0,1)}/><div/>
   </div>;}
 
+// ============================================================
+// IMPROVED LIGHTING: inverse-square flashlight + colored bias
+// ============================================================
+function computeLit(gx,gy,p,g){
+  const dx=gx-p.x,dy=gy-p.y,dist=Math.sqrt(dx*dx+dy*dy);
+  // Tiny ambient base
+  let total=0.006;
+  // Near-player fill light (device glow)
+  if(dist<2.5)total=Math.max(total,0.75*(1-dist/2.5)**1.8);
+  // Flashlight cone — inverse-square falloff for realism
+  if(dist<g.flashRadius){
+    const fd=p.dir,ang=Math.atan2(dy,dx),pdAng=Math.atan2(fd.y,fd.x);
+    let diff=Math.abs(ang-pdAng);if(diff>Math.PI)diff=2*Math.PI-diff;
+    // Primary cone (narrow, bright)
+    if(diff<1.15){
+      const falloff=1/(1+(dist*0.2)**2);
+      const cone=(1-diff/1.15)**2.0;
+      total+=falloff*cone*0.88;}
+    // Soft ambient spill around cone
+    if(diff<2.1&&dist<g.flashRadius*0.55)
+      total=Math.max(total,0.1*(1-diff/2.1)*(1-dist/(g.flashRadius*0.55)));
+  }
+  return Math.min(1,total);
+}
+
+// Colored light bias from nearby sources (broken servers, USB sticks, tools)
+function computeColorBias(gx,gy,g){
+  let r=0,gr=0,b=0;
+  for(const bs of g.brokenServers){if(bs.fixed)continue;
+    const col=bs.toolType>=0?TOOL_TYPES[bs.toolType]:USB_COLORS[bs.colorIndex];
+    const dist=Math.sqrt((gx-bs.x)**2+(gy-bs.y)**2);
+    if(dist<5.5){const f=Math.pow(Math.max(0,1-dist/5.5),2.2);
+      r+=col.r/255*f*0.65;gr+=col.g/255*f*0.65;b+=col.b/255*f*0.65;}}
+  for(const usb of g.usbSticks){if(usb.collected)continue;
+    const col=USB_COLORS[usb.colorIndex];
+    const dist=Math.sqrt((gx-usb.x)**2+(gy-usb.y)**2);
+    if(dist<4){const f=Math.pow(Math.max(0,1-dist/4),2.2);
+      r+=col.r/255*f*0.45;gr+=col.g/255*f*0.45;b+=col.b/255*f*0.45;}}
+  for(const tool of g.tools){if(tool.collected)continue;
+    const col=TOOL_TYPES[tool.toolType];
+    const dist=Math.sqrt((gx-tool.x)**2+(gy-tool.y)**2);
+    if(dist<4){const f=Math.pow(Math.max(0,1-dist/4),2.2);
+      r+=col.r/255*f*0.4;gr+=col.g/255*f*0.4;b+=col.b/255*f*0.4;}}
+  return{r:Math.min(1,r),g:Math.min(1,gr),b:Math.min(1,b)};}
+
 export default function DataCenterMaze(){
   const canvasRef=useRef(null);const[gs,setGs]=useState(null);const[dims,setDims]=useState({w:1400,h:850});
   const[gamePhase,setGamePhase]=useState('splash');const splashStartRef=useRef(Date.now());
+  const[selectedChar,setSelectedChar]=useState(0);  // 0=bearded, 1=professor
+  const selectedCharRef=useRef(0);
   const keysRef=useRef(new Set()),lastMoveRef=useRef(0),particlesRef=useRef([]),gRef=useRef(null);
+  // Movement: tap=1 tile, hold=continuous after 180ms
+  const pendingDirRef=useRef(null);   // current direction held {dx,dy}
+  const pendingNewRef=useRef(false);  // true = freshly pressed, not yet consumed
+  const continuousRef=useRef(false);  // true = held long enough for continuous walk
+  const holdTimerRef=useRef(null);    // setTimeout handle
   const walkRef=useRef({x:1,y:1,moving:false,walkCycle:0}),camRef=useRef({x:0,y:0});
   const revealedRef=useRef(new Uint8Array(MW*MH));
   const notifRef=useRef({text:'',timer:0});const sparksRef=useRef([]);const arcsRef=useRef([]);const dustRef=useRef([]);
@@ -73,71 +168,58 @@ export default function DataCenterMaze(){
     else setDims({w:Math.min(1400,Math.floor(vw*0.96)),h:Math.min(850,Math.floor(vh*0.88))});};
     r();window.addEventListener('resize',r);return()=>window.removeEventListener('resize',r);},[]);
 
-  const initGame=useCallback((level=1)=>{
+  const initGame=useCallback((level=1,charIdx=0)=>{
     const maze=genMaze(MW,MH);const player={x:1,y:1,dir:{x:1,y:0},facing:'se'};
     const types=['tall','wide','blade','network','storage'];const servers=[];
     for(let y=0;y<MH;y++)for(let x=0;x<MW;x++){if(maze[y][x]===1){let adj=false;[[0,-1],[0,1],[-1,0],[1,0]].forEach(([dx,dy])=>{const n2=x+dx,m2=y+dy;if(n2>=0&&n2<MW&&m2>=0&&m2<MH&&maze[m2][n2]===0)adj=true;});
       if(adj){const r=tR(x,y,42),type=types[Math.floor(r*types.length)],nL=2+Math.floor(tR(x,y,77)*4);
-        servers.push({x,y,type,lights:Array.from({length:nL},(_,i)=>({color:['#00cc33','#cc2222','#0088cc','#cc8800','#cc00aa','#00ccaa'][Math.floor(tR(x,y,i*17)*6)],blink:0.3+tR(x,y,i*31)*4,offset:tR(x,y,i*53)*Math.PI*2,yPos:0.12+tR(x,y,i*71)*0.75,xPos:0.6+tR(x,y,i*91)*0.35}))})}}}
+        servers.push({x,y,type,lights:Array.from({length:nL},(_,i)=>({color:['#00cc33','#cc2222','#0088cc','#cc8800','#cc00aa','#00ccaa'][Math.floor(tR(x,y,i*17)*6)],blink:0.3+tR(x,y,i*31)*4,offset:tR(x,y,i*53)*Math.PI*2,yPos:0.12+tR(x,y,i*71)*0.75,xPos:0.6+tR(x,y,i*91)*0.35}))});}}}
     const avoidList=[{x:1,y:1}];
-    // Mechanic type: levels 1-5 = USB sticks, levels 6-8 = tools, levels 9-10 = tools + guards
     const useTools=level>=6;
-    // Broken server count (always multiples of 4): lvl1=4, lvl2=8, lvl3=12, lvl4=16, lvl5=16, lvl6=4, lvl7=8, lvl8=12, lvl9+=12
     const brokenCount=level<=5?Math.min(16,4*level):level===6?4:level===7?8:12;
     const numDrives=brokenCount/4;
     const driveSpots=placeOnFloor(maze,numDrives,avoidList);avoidList.push(...driveSpots);
     const drives=driveSpots.map((s,i)=>({...s,code:Array.from({length:4},()=>Math.floor(Math.random()*10)),collected:false,id:i}));
     const levelColor=Math.floor(Math.random()*USB_COLORS.length);
     const brokenServers=[];
-    // 4 broken servers per drive, each holds one fragment (digit position 0-3)
     for(let bi=0;bi<brokenCount;bi++){const di=bi%numDrives,fi=Math.floor(bi/numDrives);
       const spots=placeOnWall(maze,1,avoidList);if(spots.length===0)continue;
       spots.forEach(s=>avoidList.push({x:s.x,y:s.y},{x:s.adjX,y:s.adjY}));
       const pos=fi<FRAGS_PER?fi:Math.floor(Math.random()*FRAGS_PER);
       const toolType=useTools?bi%TOOL_TYPES.length:-1;
       brokenServers.push({x:spots[0].x,y:spots[0].y,adjX:spots[0].adjX,adjY:spots[0].adjY,driveId:di,position:pos,digit:drives[di].code[pos],fixed:false,colorIndex:useTools?toolType:levelColor,toolType});}
-    // USB sticks (levels 1-5) or Tools (levels 6+)
     let usbSticks=[],tools=[];
     if(!useTools){const usbSpots=placeOnFloor(maze,brokenCount,avoidList);avoidList.push(...usbSpots);
       usbSticks=usbSpots.map((s,i)=>({...s,colorIndex:levelColor,collected:false,id:i}));}
     else{for(let ti=0;ti<TOOL_TYPES.length;ti++){const spots=placeOnFloor(maze,1,avoidList);avoidList.push(...spots);
       tools.push({...spots[0],toolType:ti,collected:false,id:ti});}}
-    // Security guards (levels 9+)
     const guards=[];
     if(level>=9){const guardCount=1;const sightRange=level>=10?7:4;
       for(let gi=0;gi<guardCount;gi++){const gSpots=placeOnFloor(maze,1,avoidList.concat([{x:player.x,y:player.y}]));
         if(gSpots.length>0){avoidList.push(...gSpots);
-          // Generate random patrol waypoints
           const patrolPts=placeOnFloor(maze,4,[gSpots[0]]);
-          guards.push({x:gSpots[0].x,y:gSpots[0].y,walkPos:{x:gSpots[0].x,y:gSpots[0].y},dir:{x:0,y:1},patrol:[gSpots[0],...patrolPts],patrolIdx:0,moveTimer:0,sightRange,alertTimer:0});}}}
-    // Par time for scoring (seconds) — beating par gives bonus
+          guards.push({x:gSpots[0].x,y:gSpots[0].y,walkPos:{x:gSpots[0].x,y:gSpots[0].y},dir:{x:0,y:1},facing:'sw',walkCycle:0,patrol:[gSpots[0],...patrolPts],patrolIdx:0,moveTimer:0,sightRange,alertTimer:0});}}}
     const parTime=120+(level-1)*30;
-    walkRef.current={x:1,y:1,moving:false,walkCycle:0};revealedRef.current=new Uint8Array(MW*MH);
+    walkRef.current={x:1,y:1,moving:false,walkCycle:0,queued:null};revealedRef.current=new Uint8Array(MW*MH);
     sparksRef.current=[];arcsRef.current=[];dustRef.current=[];notifRef.current={text:'',timer:0};setShowPhone(false);
     const p=toIso(1,1);camRef.current={x:p.x,y:p.y};
-    const g={maze,player,drives,brokenServers,servers,score:0,totalDrives:numDrives,won:false,levelComplete:false,gameOver:false,gameOverReason:null,level,flashRadius:12,fragments:[],codeEntry:null,atDrive:null,usbSticks,tools,guards,usbInventory:[],collectedTools:[],atBrokenServer:null,cyberdeckEntry:null,levelColor,useTools,startTime:Date.now(),parTime,elapsed:0,levelScore:0,showScoreEntry:false,scoreInitials:['A','A','A'],scoreCursor:0};
-    gRef.current=g;setGs({...g});
-  },[]);
-  // (init handled by gamePhase effect below)
-  // Splash screen animation
+    const g={maze,player,drives,brokenServers,servers,score:0,totalDrives:numDrives,won:false,levelComplete:false,gameOver:false,gameOverReason:null,level,charIdx,flashRadius:12,fragments:[],codeEntry:null,atDrive:null,usbSticks,tools,guards,usbInventory:[],collectedTools:[],atBrokenServer:null,cyberdeckEntry:null,levelColor,useTools,startTime:Date.now(),parTime,elapsed:0,levelScore:0,showScoreEntry:false,scoreInitials:['A','A','A'],scoreCursor:0};
+    gRef.current=g;setGs({...g});},[]);
+
   useEffect(()=>{if(gamePhase!=='splash')return;let aid;
     const splashLoop=(ts)=>{const cv=canvasRef.current;if(!cv){aid=requestAnimationFrame(splashLoop);return;}
-      drawSplash(cv.getContext('2d'),cv.width,cv.height,ts,Date.now()-splashStartRef.current);
+      drawSplash(cv.getContext('2d'),cv.width,cv.height,ts,Date.now()-splashStartRef.current,selectedChar);
       aid=requestAnimationFrame(splashLoop);};
     aid=requestAnimationFrame(splashLoop);
-    // Also allow click/touch to dismiss
-    const dismiss=()=>{if(Date.now()-splashStartRef.current>1500)setGamePhase('playing');};
+    const dismiss=()=>{if(Date.now()-splashStartRef.current>1500){initGame(1,selectedCharRef.current);setGamePhase('playing');}};
     window.addEventListener('click',dismiss);window.addEventListener('touchstart',dismiss);
-    return()=>{cancelAnimationFrame(aid);window.removeEventListener('click',dismiss);window.removeEventListener('touchstart',dismiss);};
-  },[gamePhase]);
-  useEffect(()=>{if(gamePhase==='playing'&&!gRef.current)initGame();},[initGame,gamePhase]);
+    return()=>{cancelAnimationFrame(aid);window.removeEventListener('click',dismiss);window.removeEventListener('touchstart',dismiss);};},[gamePhase,selectedChar,initGame]);
 
-  const startNextLevel=useCallback(()=>{const g=gRef.current;if(g)initGame(g.level+1);},[initGame]);
+  useEffect(()=>{if(gamePhase==='playing'&&!gRef.current)initGame(1,selectedCharRef.current);},[initGame,gamePhase]);
+  const startNextLevel=useCallback(()=>{const g=gRef.current;if(g)initGame(g.level+1,g.charIdx||0);},[initGame]);
 
-  // Screen: ▲=NE(0,-1) ▼=SW(0,1) ◀=NW(-1,0) ▶=SE(1,0)
   const movePlayer=useCallback((dx,dy)=>{
     const g=gRef.current;if(!g||g.won||g.gameOver)return;
-    // Score initials entry
     if(g.levelComplete&&g.showScoreEntry){const chars='ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!?#';
       if(dy===-1){const ci=chars.indexOf(g.scoreInitials[g.scoreCursor]);g.scoreInitials[g.scoreCursor]=chars[(ci+1)%chars.length];}
       else if(dy===1){const ci=chars.indexOf(g.scoreInitials[g.scoreCursor]);g.scoreInitials[g.scoreCursor]=chars[(ci-1+chars.length)%chars.length];}
@@ -152,7 +234,9 @@ export default function DataCenterMaze(){
       else if(dx===-1)ce.cursor=Math.max(0,ce.cursor-1);
       else if(dx===1)ce.cursor=Math.min(3,ce.cursor+1);
       setGs({...g});return;}
-    const w=walkRef.current;if(w.moving)return;
+    const w=walkRef.current;
+    // Hard block while moving — next input accepted via distance threshold in game loop
+    if(w.moving)return;
     if(dx===-1&&dy===0)g.player.facing='nw';
     else if(dx===1&&dy===0)g.player.facing='se';
     else if(dx===0&&dy===-1)g.player.facing='ne';
@@ -161,34 +245,27 @@ export default function DataCenterMaze(){
     const nx=g.player.x+dx,ny=g.player.y+dy;
     if(nx>=0&&nx<MW&&ny>=0&&ny<MH&&g.maze[ny][nx]===0){
       g.player.x=nx;g.player.y=ny;w.moving=true;g.atDrive=null;g.atBrokenServer=null;
-      // USB stick pickup (levels 1-5)
       for(const usb of g.usbSticks){if(!usb.collected&&usb.x===nx&&usb.y===ny){usb.collected=true;
         g.usbInventory.push(usb.colorIndex);
         const col=USB_COLORS[usb.colorIndex];
         notifRef.current={text:`USB STICK COLLECTED: ${col.name.toUpperCase()}`,timer:180};
         const iso=toIso(nx,ny);for(let i=0;i<20;i++)particlesRef.current.push({x:iso.x,y:iso.y-20,vx:(Math.random()-0.5)*6,vy:-Math.random()*5-1,life:1,color:col.hex});}}
-      // Tool pickup (levels 6+, reusable)
       for(const tool of g.tools){if(!tool.collected&&tool.x===nx&&tool.y===ny){tool.collected=true;
         g.collectedTools.push(tool.toolType);
         const tt=TOOL_TYPES[tool.toolType];
         notifRef.current={text:`TOOL COLLECTED: ${tt.name.toUpperCase()}`,timer:180};
         const iso=toIso(nx,ny);for(let i=0;i<20;i++)particlesRef.current.push({x:iso.x,y:iso.y-20,vx:(Math.random()-0.5)*6,vy:-Math.random()*5-1,life:1,color:tt.hex});}}
-      // Check if adjacent to broken server
       for(let i=0;i<g.brokenServers.length;i++){const bs=g.brokenServers[i];
         if(!bs.fixed&&bs.adjX===nx&&bs.adjY===ny){g.atBrokenServer=i;
           notifRef.current={text:'PRESS ENTER TO ACCESS SERVER',timer:999};break;}}
-      // Golden drive — just mark we're at it, don't open code yet
       for(const d of g.drives){if(!d.collected&&d.x===nx&&d.y===ny){
         g.atDrive=d.id;
         notifRef.current={text:'PRESS ENTER TO ACCESS DRIVE',timer:999};}}
-      setGs({...g});}
-  },[]);
+      setGs({...g});}},[]);
 
-  const openCodeEntry=useCallback(()=>{
-    const g=gRef.current;if(!g||g.atDrive===null||g.codeEntry)return;
+  const openCodeEntry=useCallback(()=>{const g=gRef.current;if(!g||g.atDrive===null||g.codeEntry)return;
     g.codeEntry={driveId:g.atDrive,digits:[0,0,0,0],cursor:0};
-    notifRef.current={text:'',timer:0};setGs({...g});
-  },[]);
+    notifRef.current={text:'',timer:0};setGs({...g});},[]);
 
   const submitCode=useCallback(()=>{const g=gRef.current;if(!g||!g.codeEntry)return;
     const ce=g.codeEntry,drive=g.drives[ce.driveId];
@@ -198,48 +275,54 @@ export default function DataCenterMaze(){
       const iso=toIso(drive.x,drive.y);for(let i=0;i<25;i++)particlesRef.current.push({x:iso.x,y:iso.y-20,vx:(Math.random()-0.5)*6,vy:-Math.random()*5-2,life:1,color:`hsl(${40+Math.random()*25},100%,${55+Math.random()*35}%)`});
       if(g.score>=g.totalDrives){g.levelComplete=true;g.won=false;
         g.elapsed=Math.floor((Date.now()-g.startTime)/1000);
-        // Score: base 1000*level + time bonus (par - elapsed, min 0) * 10 * level
         const timeBonus=Math.max(0,g.parTime-g.elapsed);
         g.levelScore=1000*g.level+timeBonus*10*g.level;
         g.showScoreEntry=true;g.scoreInitials=['A','A','A'];g.scoreCursor=0;}setGs({...g});
-    }else{notifRef.current={text:'ACCESS DENIED',timer:120};g.codeEntry=null;setGs({...g});}
-  },[]);
-  const cancelCode=useCallback(()=>{const g=gRef.current;if(g){g.codeEntry=null;g.cyberdeckEntry=null;setGs({...g});};},[]);
+    }else{notifRef.current={text:'ACCESS DENIED',timer:120};g.codeEntry=null;setGs({...g});}},[]);
 
-  const submitScore=useCallback(async()=>{
-    const g=gRef.current;if(!g||!g.showScoreEntry)return;
+  const cancelCode=useCallback(()=>{const g=gRef.current;if(g){g.codeEntry=null;g.cyberdeckEntry=null;setGs({...g});}},[]);
+
+  const submitScore=useCallback(async()=>{const g=gRef.current;if(!g||!g.showScoreEntry)return;
     const initials=g.scoreInitials.join('');const entry={initials,score:g.levelScore,level:g.level,time:g.elapsed};
-    // Save locally as fallback
     const hs=highScoresRef.current;
     const lk=`lvl${g.level}`;if(!hs.levels[lk])hs.levels[lk]=[];
     hs.levels[lk].push(entry);hs.levels[lk].sort((a,b)=>b.score-a.score);hs.levels[lk]=hs.levels[lk].slice(0,20);
     hs.overall.push(entry);hs.overall.sort((a,b)=>b.score-a.score);hs.overall=hs.overall.slice(0,20);
-    saveScoresLocal();
-    // Submit to Firebase
-    await submitScoreToFirebase(entry);
-    refreshScores();
-    g.showScoreEntry=false;setGs({...g});
-  },[refreshScores]);
+    saveScoresLocal();await submitScoreToFirebase(entry);refreshScores();
+    g.showScoreEntry=false;setGs({...g});},[refreshScores]);
 
-  const openCyberdeck=useCallback(()=>{
-    const g=gRef.current;if(!g||g.atBrokenServer===null||g.cyberdeckEntry)return;
+  const openCyberdeck=useCallback(()=>{const g=gRef.current;if(!g||g.atBrokenServer===null||g.cyberdeckEntry)return;
     const bs=g.brokenServers[g.atBrokenServer];
     let hasMatch=false;
-    if(g.useTools){
-      hasMatch=g.collectedTools.includes(bs.toolType);
-      // Tools are reusable, don't remove
-    }else{
-      const usbIdx=g.usbInventory.indexOf(bs.colorIndex);
-      hasMatch=usbIdx!==-1;
-      if(hasMatch)g.usbInventory.splice(usbIdx,1);
-    }
+    if(g.useTools){hasMatch=g.collectedTools.includes(bs.toolType);}
+    else{const usbIdx=g.usbInventory.indexOf(bs.colorIndex);hasMatch=usbIdx!==-1;if(hasMatch)g.usbInventory.splice(usbIdx,1);}
     g.cyberdeckEntry={brokenIndex:g.atBrokenServer,colorIndex:bs.colorIndex,toolType:bs.toolType,hasMatch,useTools:g.useTools,phase:hasMatch?'running':'denied',timer:0};
-    notifRef.current={text:'',timer:0};setGs({...g});
-  },[]);
+    notifRef.current={text:'',timer:0};setGs({...g});},[]);
 
-  useEffect(()=>{const kd=(e)=>{const k=e.key.toLowerCase();keysRef.current.add(k);
+  useEffect(()=>{
+    const MOVE_DIRS={w:{dx:0,dy:-1},arrowup:{dx:0,dy:-1},s:{dx:0,dy:1},arrowdown:{dx:0,dy:1},a:{dx:-1,dy:0},arrowleft:{dx:-1,dy:0},d:{dx:1,dy:0},arrowright:{dx:1,dy:0}};
+    const kd=(e)=>{const k=e.key.toLowerCase();keysRef.current.add(k);
     if(['w','a','s','d','arrowup','arrowdown','arrowleft','arrowright','escape','enter','tab'].includes(k))e.preventDefault();
-    if(gamePhase==='splash'){if(Date.now()-splashStartRef.current>1500){setGamePhase('playing');}return;}
+    if(gamePhase==='splash'){if(Date.now()-splashStartRef.current>1500){
+      if(k==='a'||k==='arrowleft'){selectedCharRef.current=0;setSelectedChar(0);}
+      else if(k==='d'||k==='arrowright'){selectedCharRef.current=1;setSelectedChar(1);}
+      else{initGame(1,selectedCharRef.current);setGamePhase('playing');}}return;}
+    // Movement direction: tap fires one tile, holding >180ms enables continuous walk
+    if(MOVE_DIRS[k]){
+      const dir=MOVE_DIRS[k];
+      const g=gRef.current;
+      // Handle code/initials entry navigation directly
+      if(g&&(g.codeEntry||g.cyberdeckEntry||(g.levelComplete&&g.showScoreEntry))){
+        movePlayer(dir.dx,dir.dy);
+      } else {
+        const cur=pendingDirRef.current;
+        if(!cur||cur.dx!==dir.dx||cur.dy!==dir.dy){
+          // New direction pressed — always counts as fresh tap
+          pendingDirRef.current=dir;
+          pendingNewRef.current=true;
+          continuousRef.current=false;
+          clearTimeout(holdTimerRef.current);
+          holdTimerRef.current=setTimeout(()=>{continuousRef.current=true;},180);}}}
     if(k==='escape')cancelCode();
     if(k==='enter'){const g=gRef.current;if(!g)return;
       if(g.levelComplete&&g.showScoreEntry)submitScore();
@@ -250,39 +333,45 @@ export default function DataCenterMaze(){
       else if(g.atDrive!==null)openCodeEntry();
       else if(g.atBrokenServer!==null)openCyberdeck();}
     if(k==='tab'){e.preventDefault();setShowScoreboard(p=>!p);}};
-    const ku=(e)=>{keysRef.current.delete(e.key.toLowerCase());};
-    window.addEventListener('keydown',kd);window.addEventListener('keyup',ku);return()=>{window.removeEventListener('keydown',kd);window.removeEventListener('keyup',ku);};},[cancelCode,submitCode,submitScore,openCodeEntry,openCyberdeck,startNextLevel,initGame,gamePhase]);
+    const ku=(e)=>{const k=e.key.toLowerCase();keysRef.current.delete(k);
+      // Clear direction on key release
+      if(MOVE_DIRS[k]){
+        const dir=MOVE_DIRS[k];
+        const cur=pendingDirRef.current;
+        if(cur&&cur.dx===dir.dx&&cur.dy===dir.dy){
+          pendingDirRef.current=null;pendingNewRef.current=false;
+          continuousRef.current=false;clearTimeout(holdTimerRef.current);}}};
+    window.addEventListener('keydown',kd);window.addEventListener('keyup',ku);
+    return()=>{window.removeEventListener('keydown',kd);window.removeEventListener('keyup',ku);clearTimeout(holdTimerRef.current);};},[cancelCode,submitCode,submitScore,openCodeEntry,openCyberdeck,startNextLevel,initGame,gamePhase,movePlayer]);
 
   useEffect(()=>{if(!gs)return;let aid;
     const loop=(ts)=>{const g=gRef.current;if(!g){aid=requestAnimationFrame(loop);return;}
       const keys=keysRef.current;
-      if(!isMobile&&ts-lastMoveRef.current>100&&!g.won&&!g.levelComplete&&!g.gameOver){let dx=0,dy=0;
-        if(keys.has('w')||keys.has('arrowup'))dy=-1;
-        else if(keys.has('s')||keys.has('arrowdown'))dy=1;
-        else if(keys.has('a')||keys.has('arrowleft'))dx=-1;
-        else if(keys.has('d')||keys.has('arrowright'))dx=1;
-        if(dx||dy){movePlayer(dx,dy);lastMoveRef.current=ts;}}
+      // Movement: fire when idle AND (freshly pressed OR held >180ms)
       const w=walkRef.current,tx=g.player.x,ty=g.player.y,ddx=tx-w.x,ddy=ty-w.y,dist=Math.sqrt(ddx*ddx+ddy*ddy);
-      if(dist>0.01){const step=Math.min(WS,dist);w.x+=ddx/dist*step;w.y+=ddy/dist*step;w.walkCycle+=0.18;w.moving=dist>WS*2;}
-      else{w.x=tx;w.y=ty;w.moving=false;}
+      const canMove=!g.won&&!g.levelComplete&&!g.gameOver&&!g.codeEntry&&!g.cyberdeckEntry;
+      if(!isMobile&&canMove&&!w.moving&&pendingDirRef.current){
+        if(pendingNewRef.current||continuousRef.current){
+          const{dx,dy}=pendingDirRef.current;
+          movePlayer(dx,dy);
+          pendingNewRef.current=false;}}
+      // Interpolate visual position toward logical tile
+      if(dist>0.01){const step=Math.min(WS,dist);w.x+=ddx/dist*step;w.y+=ddy/dist*step;w.walkCycle+=0.22;w.moving=true;}
+      else{w.x=tx;w.y=ty;w.moving=false;w.walkCycle=0;}
       const tI=toIso(w.x,w.y);camRef.current.x+=(tI.x-camRef.current.x)*0.1;camRef.current.y+=(tI.y-camRef.current.y)*0.1;
       const rev=revealedRef.current;for(let gy2=0;gy2<MH;gy2++)for(let gx2=0;gx2<MW;gx2++){if(Math.sqrt((gx2-g.player.x)**2+(gy2-g.player.y)**2)<g.flashRadius)rev[gy2*MW+gx2]=1;}
-      // Enhanced sparks for broken servers
       for(const bs of g.brokenServers){if(bs.fixed)continue;const col=g.useTools?TOOL_TYPES[bs.toolType]:USB_COLORS[bs.colorIndex];const iso=toIso(bs.x,bs.y);
         if(Math.random()<0.25){for(let si=0;si<2+Math.floor(Math.random()*2);si++){
           sparksRef.current.push({x:iso.x+(Math.random()-0.5)*30,y:iso.y-15-Math.random()*40,vx:(Math.random()-0.5)*4,vy:-Math.random()*3-0.5,life:0.8+Math.random()*0.5,color:col.hex,size:1.5+Math.random()*2});}}
-        // Electrical arcs
         if(Math.random()<0.016){const pts=[];const n=3+Math.floor(Math.random()*3);
           for(let i=0;i<n;i++)pts.push({x:iso.x+(Math.random()-0.5)*36,y:iso.y-10-Math.random()*50});
           arcsRef.current.push({points:pts,life:0.3+Math.random()*0.2,color:col.hex,r:col.r,g:col.g,b:col.b});}}
       sparksRef.current=sparksRef.current.filter(s=>{s.x+=s.vx;s.y+=s.vy;s.vy+=0.05;s.life-=0.025;return s.life>0;});
       arcsRef.current=arcsRef.current.filter(a=>{a.life-=0.03;return a.life>0;});
-      // Ambient dust
       if(dustRef.current.length<50&&Math.random()<0.3){const pI2=toIso(g.player.x,g.player.y);
         dustRef.current.push({x:pI2.x+(Math.random()-0.5)*TW*8,y:pI2.y+(Math.random()-0.5)*TH*8-30,vx:(Math.random()-0.5)*0.15,vy:-0.05-Math.random()*0.1,life:1,size:0.8+Math.random()*1.2});}
       dustRef.current=dustRef.current.filter(d=>{d.x+=d.vx;d.y+=d.vy;d.life-=0.002;return d.life>0;});
       particlesRef.current=particlesRef.current.filter(p=>{p.x+=p.vx;p.y+=p.vy;p.vy+=0.1;p.life-=0.02;return p.life>0;});
-      // Cyberdeck timer
       if(g.cyberdeckEntry){g.cyberdeckEntry.timer++;
         if(g.cyberdeckEntry.phase==='denied'&&g.cyberdeckEntry.timer>120){g.cyberdeckEntry=null;}
         if(g.cyberdeckEntry&&g.cyberdeckEntry.phase==='running'&&g.cyberdeckEntry.timer>180){
@@ -293,13 +382,9 @@ export default function DataCenterMaze(){
           const iso=toIso(bs.x,bs.y);for(let i=0;i<25;i++)particlesRef.current.push({x:iso.x,y:iso.y-30,vx:(Math.random()-0.5)*6,vy:-Math.random()*5-1,life:1,color:rcol.hex});
           g.cyberdeckEntry=null;g.atBrokenServer=null;}}
       if(notifRef.current.timer>0&&!(g.atDrive!==null&&!g.codeEntry)&&!(g.atBrokenServer!==null&&!g.cyberdeckEntry))notifRef.current.timer--;
-      // Count-up timer (pause during cyberdeck and when level complete/game over)
-      if(!g.levelComplete&&!g.gameOver&&!g.won&&!g.cyberdeckEntry){
-        g.elapsed=Math.floor((Date.now()-g.startTime)/1000);}
-      // Guard AI
+      if(!g.levelComplete&&!g.gameOver&&!g.won&&!g.cyberdeckEntry){g.elapsed=Math.floor((Date.now()-g.startTime)/1000);}
       for(const gd of g.guards){if(g.gameOver||g.levelComplete)break;
         gd.moveTimer++;
-        // Move every 8 frames (~133ms at 60fps, slower than player)
         if(gd.moveTimer>=8){gd.moveTimer=0;
           const tgt=gd.patrol[gd.patrolIdx];const gdx=Math.sign(tgt.x-gd.x),gdy=Math.sign(tgt.y-gd.y);
           let nx2=gd.x,ny2=gd.y;
@@ -308,10 +393,22 @@ export default function DataCenterMaze(){
           else{gd.patrolIdx=(gd.patrolIdx+1)%gd.patrol.length;continue;}
           gd.x=nx2;gd.y=ny2;if(gdx||gdy)gd.dir={x:gdx||gd.dir.x,y:gdy||gd.dir.y};
           if(Math.abs(gd.x-tgt.x)<=1&&Math.abs(gd.y-tgt.y)<=1)gd.patrolIdx=(gd.patrolIdx+1)%gd.patrol.length;}
-        // Smooth walk interpolation
         const wdx=gd.x-gd.walkPos.x,wdy=gd.y-gd.walkPos.y;
+        const gdist=Math.sqrt(wdx*wdx+wdy*wdy);
         gd.walkPos.x+=wdx*0.08;gd.walkPos.y+=wdy*0.08;
-        // Line-of-sight check
+        // Advance walk cycle when moving
+        if(gdist>0.05){gd.walkCycle=(gd.walkCycle||0)+0.20;}
+        else{gd.walkCycle=0;}
+        // Map dir to facing string
+        const dx2=gd.dir.x,dy2=gd.dir.y;
+        if(dx2===1&&dy2===0)gd.facing='se';
+        else if(dx2===-1&&dy2===0)gd.facing='nw';
+        else if(dx2===0&&dy2===1)gd.facing='sw';
+        else if(dx2===0&&dy2===-1)gd.facing='ne';
+        else if(dx2===1)gd.facing='se';
+        else if(dx2===-1)gd.facing='nw';
+        else if(dy2===1)gd.facing='sw';
+        else gd.facing='ne';
         const px2=g.player.x,py2=g.player.y,dist2=Math.sqrt((px2-gd.x)**2+(py2-gd.y)**2);
         if(dist2<=gd.sightRange){let blocked=false;
           const steps=Math.ceil(dist2*2);
@@ -320,54 +417,51 @@ export default function DataCenterMaze(){
             if(g.maze[cy2]&&g.maze[cy2][cx2]===1){blocked=true;break;}}
           if(!blocked){g.gameOver=true;g.gameOverReason='guard';}}}
       draw(ts,g);aid=requestAnimationFrame(loop);};
-    aid=requestAnimationFrame(loop);return()=>cancelAnimationFrame(aid);
-  },[gs,isMobile,movePlayer]);
-
-  const computeLit=(gx,gy,p,g)=>{const dx=gx-p.x,dy=gy-p.y,dist=Math.sqrt(dx*dx+dy*dy);
-    const amb=dist<6?0.4*(1-dist/6)**1.4:0;let fl=0;
-    if(dist<g.flashRadius){const fd=p.dir,ang=Math.atan2(dy,dx);let diff=Math.abs(ang-Math.atan2(fd.y,fd.x));if(diff>Math.PI)diff=2*Math.PI-diff;
-      if(diff<1.2)fl=(1-diff/1.2)*(1-dist/g.flashRadius)*0.9;if(diff<2.0&&dist<g.flashRadius*0.6)fl=Math.max(fl,0.15*(1-diff/2.0)*(1-dist/(g.flashRadius*0.6)));}
-    if(dist<2.5)fl=Math.max(fl,0.85*(1-dist/2.5));return Math.min(1,fl+amb+0.008);};
+    aid=requestAnimationFrame(loop);return()=>cancelAnimationFrame(aid);},[gs,isMobile,movePlayer]);
 
   const draw=(ts,g)=>{const cv=canvasRef.current;if(!cv||!g)return;const ctx=cv.getContext('2d');const W=cv.width,H=cv.height;
-    ctx.fillStyle='#020204';ctx.fillRect(0,0,W,H);const{maze,player,drives,brokenServers,servers}=g;
+    // GBC-dark background instead of pure black
+    ctx.fillStyle='#020408';ctx.fillRect(0,0,W,H);
+    const{maze,player,drives,brokenServers,servers}=g;
     const w=walkRef.current,pIso=toIso(w.x,w.y);
     const camX=Math.round(W/2-camRef.current.x),camY=Math.round(H/2-camRef.current.y);ctx.save();ctx.translate(camX,camY);
-    const rev=revealedRef.current;const litMap=new Float32Array(MW*MH);
-    for(let gy=0;gy<MH;gy++)for(let gx=0;gx<MW;gx++)litMap[gy*MW+gx]=computeLit(gx,gy,player,g);
-    // Build golden drive set for glow
+    const rev=revealedRef.current;
+    // Compute per-tile luminance AND color bias maps
+    const litMap=new Float32Array(MW*MH);
+    const colorBiasMap=new Array(MW*MH);
+    for(let gy=0;gy<MH;gy++)for(let gx=0;gx<MW;gx++){
+      litMap[gy*MW+gx]=computeLit(gx,gy,player,g);
+      colorBiasMap[gy*MW+gx]=computeColorBias(gx,gy,g);}
     const driveSet=new Set();for(const d of drives){if(!d.collected)driveSet.add(d.y*MW+d.x);}
-    // Build broken server lookup map (wall tiles)
     const brokenMap=new Map();for(const bs of brokenServers){if(!bs.fixed)brokenMap.set(`${bs.x},${bs.y}`,bs);}
-    // Build USB stick / tool lookup maps (floor tiles)
     const usbMap=new Map();for(const usb of g.usbSticks){if(!usb.collected)usbMap.set(`${usb.x},${usb.y}`,usb);}
     const toolMap=new Map();for(const tool of g.tools){if(!tool.collected)toolMap.set(`${tool.x},${tool.y}`,tool);}
     const pD=player.x+player.y;const tiles=[];
     for(let gy=0;gy<MH;gy++)for(let gx=0;gx<MW;gx++)tiles.push({gx,gy,d:gx+gy});tiles.sort((a,b)=>a.d-b.d);
     let pDrawn=false;
     for(const{gx,gy}of tiles){const td=gx+gy;
-      if(!pDrawn&&td>pD){drawAgent(ctx,pIso.x,pIso.y,ts,player,w);drawBeam(ctx,pIso.x,pIso.y,player,g);pDrawn=true;}
-      const idx=gy*MW+gx,lit=litMap[idx],revealed=rev[idx]===1;if(!revealed&&lit<0.005)continue;const iso=toIso(gx,gy);
-      const isGold=driveSet.has(idx);
-      if(maze[gy][gx]===0){drawFloor(ctx,iso.x,iso.y,revealed?Math.max(0.04,lit):lit,isGold?ts:0,gx,gy);
+      if(!pDrawn&&td>pD){drawAgent(ctx,pIso.x,pIso.y,ts,player,w,g.charIdx||0);if(!_charReady[g.charIdx||0])drawBeam(ctx,pIso.x,pIso.y,player,g);pDrawn=true;}
+      const idx=gy*MW+gx,lit=litMap[idx],revealed=rev[idx]===1;if(!revealed&&lit<0.005)continue;
+      const iso=toIso(gx,gy);const isGold=driveSet.has(idx);
+      const cb=colorBiasMap[idx];
+      if(maze[gy][gx]===0){drawFloor(ctx,iso.x,iso.y,revealed?Math.max(0.04,lit):lit,isGold?ts:0,gx,gy,cb);
         const usb=usbMap.get(`${gx},${gy}`);if(usb)drawUsbStick(ctx,iso.x,iso.y,usb.colorIndex,ts,revealed?Math.max(0.04,lit):lit);
         const tool=toolMap.get(`${gx},${gy}`);if(tool)drawTool(ctx,iso.x,iso.y,tool.toolType,ts,revealed?Math.max(0.04,lit):lit);}
       else{const bsInfo=brokenMap.get(`${gx},${gy}`);
-        drawRack(ctx,iso.x,iso.y,revealed?Math.max(0.06,lit):lit,ts,servers.find(s=>s.x===gx&&s.y===gy),gx,gy,isGold?ts:0,bsInfo);}}
-    if(!pDrawn){drawAgent(ctx,pIso.x,pIso.y,ts,player,w);drawBeam(ctx,pIso.x,pIso.y,player,g);}
-    // Draw guards
+        drawRack(ctx,iso.x,iso.y,revealed?Math.max(0.06,lit):lit,ts,servers.find(s=>s.x===gx&&s.y===gy),gx,gy,isGold?ts:0,bsInfo,cb);}}
+    if(!pDrawn){drawAgent(ctx,pIso.x,pIso.y,ts,player,w,g.charIdx||0);if(!_charReady[g.charIdx||0])drawBeam(ctx,pIso.x,pIso.y,player,g);}
     for(const gd of g.guards){const gIso=toIso(gd.walkPos.x,gd.walkPos.y);const gLit=litMap[Math.round(gd.y)*MW+Math.round(gd.x)]||0;
       if(gLit>0.01||rev[Math.round(gd.y)*MW+Math.round(gd.x)])drawGuard(ctx,gIso.x,gIso.y,ts,gd,gLit);}
-    // Sparks with color and glow
+    // Sparks
     for(const s of sparksRef.current){ctx.globalAlpha=s.life;ctx.fillStyle=s.color||`hsl(${30+Math.random()*20},100%,70%)`;ctx.beginPath();ctx.arc(s.x,s.y,(s.size||1.5)*s.life,0,Math.PI*2);ctx.fill();ctx.globalAlpha=1;}
-    // Electrical arcs
-    for(const a of arcsRef.current){if(a.points.length<2)continue;ctx.globalAlpha=a.life*2;ctx.strokeStyle=a.color;ctx.lineWidth=1.5;ctx.shadowBlur=8;ctx.shadowColor=`rgba(${a.r},${a.g},${a.b},0.8)`;
+    // Electrical arcs with color glow
+    for(const a of arcsRef.current){if(a.points.length<2)continue;ctx.globalAlpha=a.life*2;ctx.strokeStyle=a.color;ctx.lineWidth=1.5;ctx.shadowBlur=10;ctx.shadowColor=`rgba(${a.r},${a.g},${a.b},0.9)`;
       ctx.beginPath();ctx.moveTo(a.points[0].x,a.points[0].y);for(let i=1;i<a.points.length;i++)ctx.lineTo(a.points[i].x,a.points[i].y);ctx.stroke();ctx.shadowBlur=0;ctx.globalAlpha=1;}
-    // Dust particles
     for(const d of dustRef.current){ctx.globalAlpha=d.life*0.06;ctx.fillStyle='#8899aa';ctx.beginPath();ctx.arc(d.x,d.y,d.size,0,Math.PI*2);ctx.fill();}ctx.globalAlpha=1;
     for(const p of particlesRef.current){ctx.globalAlpha=p.life;ctx.fillStyle=p.color;ctx.beginPath();ctx.arc(p.x,p.y,2.5*p.life,0,Math.PI*2);ctx.fill();ctx.globalAlpha=1;}
     ctx.restore();
-    const vg=ctx.createRadialGradient(W/2,H/2,W*0.3,W/2,H/2,Math.max(W,H)*0.55);vg.addColorStop(0,'rgba(0,0,0,0)');vg.addColorStop(0.7,'rgba(0,0,0,0.04)');vg.addColorStop(1,'rgba(0,0,0,0.4)');ctx.fillStyle=vg;ctx.fillRect(0,0,W,H);
+    // CRT vignette
+    const vg=ctx.createRadialGradient(W/2,H/2,W*0.3,W/2,H/2,Math.max(W,H)*0.55);vg.addColorStop(0,'rgba(0,0,0,0)');vg.addColorStop(0.7,'rgba(0,0,4,0.05)');vg.addColorStop(1,'rgba(0,0,0,0.45)');ctx.fillStyle=vg;ctx.fillRect(0,0,W,H);
     drawHUD(ctx,W,H,g,ts,isMobile);
     if(notifRef.current.timer>0){const n=notifRef.current;const a=Math.min(1,n.timer/30);ctx.globalAlpha=a;
       ctx.font='bold 13px "JetBrains Mono",monospace';const tw=ctx.measureText(n.text).width;
@@ -397,7 +491,6 @@ export default function DataCenterMaze(){
           </div>))}
       </div>
       <div style={{color:USB_COLORS[gs.levelColor].hex,fontSize:9,marginTop:8,textAlign:'center'}}>USB sticks: {gs.usbInventory.length} in inventory</div>
-      <div style={{color:'#334',fontSize:9,marginTop:4,textAlign:'center'}}>Find {USB_COLORS[gs.levelColor].name} USB sticks to repair servers</div>
     </div>):null;
 
   const fs=firebaseScores;
@@ -415,8 +508,7 @@ export default function DataCenterMaze(){
         {(fs.overall.length===0)?<div style={{color:'#334',fontSize:10,padding:6}}>{scoresLoading?'Loading...':'No scores yet'}</div>:
         fs.overall.map((e,i)=>(
           <div key={i} style={{display:'flex',justifyContent:'space-between',padding:'3px 4px',fontSize:10,color:i<3?'#ffd700':i<10?'#0af':'#556',borderBottom:'1px solid #111'}}>
-            <span>{String(i+1).padStart(2,' ')}. {e.initials}</span>
-            <span>LVL{e.level}</span>
+            <span>{String(i+1).padStart(2,' ')}. {e.initials}</span><span>LVL{e.level}</span>
             <span>{Math.floor(e.time/60)}:{String(e.time%60).padStart(2,'0')}</span>
             <span style={{fontWeight:'bold'}}>{e.score.toLocaleString()}</span>
           </div>))}
@@ -427,16 +519,42 @@ export default function DataCenterMaze(){
           <div style={{borderTop:'1px solid #1a2040',marginBottom:10}}>
             {fs.levels[lk].slice(0,10).map((e,i)=>(
               <div key={i} style={{display:'flex',justifyContent:'space-between',padding:'2px 4px',fontSize:9,color:i<3?'#ffd700':'#556',borderBottom:'1px solid #0a0a0a'}}>
-                <span>{i+1}. {e.initials}</span>
-                <span>{Math.floor(e.time/60)}:{String(e.time%60).padStart(2,'0')}</span>
+                <span>{i+1}. {e.initials}</span><span>{Math.floor(e.time/60)}:{String(e.time%60).padStart(2,'0')}</span>
                 <span style={{fontWeight:'bold'}}>{e.score.toLocaleString()}</span>
               </div>))}
           </div>
         </div>))}
     </div>):null;
 
-  const startFromLevel=(level)=>{setShowLevelSelect(false);setGamePhase('playing');initGame(level);};
+  const startFromLevel=(level)=>{setShowLevelSelect(false);setGamePhase('playing');initGame(level,selectedCharRef.current);};
 
+  // Character selection overlay (shows during splash after boot)
+  const charSelectUI=gamePhase==='splash'?(
+    <div style={{position:'absolute',bottom:isMobile?60:80,left:0,right:0,display:'flex',flexDirection:'column',alignItems:'center',gap:10,zIndex:10,pointerEvents:'auto'}}>
+      <div style={{color:'rgba(170,102,255,0.8)',fontSize:isMobile?9:11,fontFamily:'"JetBrains Mono",monospace',letterSpacing:3,textTransform:'uppercase'}}>Select Character</div>
+      <div style={{display:'flex',gap:20,alignItems:'center'}}>
+        {[
+          {label:'Operator',desc:'Bearded · Plaid Shirt'},
+          {label:'Analyst', desc:'Tweed Jacket · Professor'},
+        ].map((ch,i)=>(
+          <button key={i} onClick={(e)=>{e.stopPropagation();selectedCharRef.current=i;setSelectedChar(i);}}
+            style={{
+              background:selectedChar===i?'rgba(170,102,255,0.18)':'rgba(10,8,20,0.6)',
+              border:`2px solid ${selectedChar===i?'#aa66ff':'rgba(80,40,120,0.4)'}`,
+              borderRadius:8,padding:'8px 14px',cursor:'pointer',fontFamily:'"JetBrains Mono",monospace',
+              display:'flex',flexDirection:'column',alignItems:'center',gap:4,
+              boxShadow:selectedChar===i?'0 0 14px rgba(170,102,255,0.4)':'none',
+              transition:'all 0.15s',minWidth:110,
+            }}>
+            <div style={{fontSize:isMobile?11:14,fontWeight:'bold',color:selectedChar===i?'#cc88ff':'#8866aa'}}>{ch.label}</div>
+            <div style={{fontSize:isMobile?8:9,color:'rgba(170,102,255,0.55)',whiteSpace:'nowrap'}}>{ch.desc}</div>
+            {selectedChar===i&&<div style={{fontSize:8,color:'#aa66ff',marginTop:2}}>▶ SELECTED</div>}
+          </button>
+        ))}
+      </div>
+      <div style={{color:'rgba(80,40,120,0.6)',fontSize:8,fontFamily:'monospace',letterSpacing:1}}>◀▶ to switch · any key to start</div>
+    </div>
+  ):null;
   const levelSelectOverlay=gamePhase==='splash'?(
     <div style={{position:'absolute',bottom:12,left:0,right:0,display:'flex',flexDirection:'column',alignItems:'center',zIndex:10,pointerEvents:'none'}}>
       {showLevelSelect&&(
@@ -451,12 +569,117 @@ export default function DataCenterMaze(){
       </button>
     </div>):null;
 
+  // ── GBC DEVICE FRAME ──
+  const GBCFrame=({children})=>(
+    <div style={{position:'relative',display:'inline-flex',flexDirection:'column',alignItems:'center'}}>
+      {/* Device body */}
+      <div style={{
+        position:'relative',
+        background:'linear-gradient(160deg,#a038c0 0%,#7820a8 35%,#6010a0 55%,#8028b8 80%,#7020a8 100%)',
+        borderRadius:isMobile?'14px 14px 36px 36px':'18px',
+        padding:isMobile?'14px 12px 10px':'18px 22px 14px',
+        boxShadow:'0 30px 90px rgba(0,0,0,0.9), inset 0 2px 8px rgba(255,255,255,0.14), inset 0 -6px 14px rgba(0,0,0,0.5), 0 0 0 1px rgba(160,80,200,0.3)',
+      }}>
+        {/* GBC label */}
+        <div style={{position:'absolute',top:8,left:'50%',transform:'translateX(-50%)',color:'rgba(255,255,255,0.22)',fontSize:9,fontFamily:'"JetBrains Mono",monospace',letterSpacing:5,textTransform:'uppercase',whiteSpace:'nowrap'}}>
+          GAME PIXEL COLOR
+        </div>
+
+        {/* Decorative top ridge */}
+        <div style={{position:'absolute',top:0,left:20,right:20,height:3,background:'linear-gradient(90deg,transparent,rgba(255,255,255,0.12),transparent)',borderRadius:2}} />
+
+        {/* Screen bezel — GBC dark plastic */}
+        <div style={{
+          marginTop:isMobile?4:10,
+          background:'#080b14',
+          borderRadius:10,
+          padding:isMobile?'10px 10px 8px':'14px 14px 10px',
+          boxShadow:'inset 0 6px 20px rgba(0,0,0,0.95), 0 0 0 2px #2a1260, 0 0 0 4px rgba(90,20,160,0.4)',
+        }}>
+          {/* "POWER" LED dot */}
+          <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:6}}>
+            <div style={{width:5,height:5,borderRadius:'50%',background:'#00ff66',boxShadow:'0 0 10px rgba(0,255,102,0.9), 0 0 20px rgba(0,255,102,0.4)'}} />
+            <div style={{flex:1,height:1,background:'rgba(0,200,255,0.06)'}} />
+            <div style={{color:'rgba(0,180,255,0.3)',fontSize:7,fontFamily:'monospace',letterSpacing:2}}>PIVITAL</div>
+          </div>
+
+          {/* Screen frame with GBC teal accent border */}
+          <div style={{
+            border:'2px solid #1a5070',
+            borderRadius:5,
+            overflow:'hidden',
+            position:'relative',
+            boxShadow:'0 0 24px rgba(0,160,200,0.12), inset 0 0 8px rgba(0,0,0,0.6)',
+          }}>
+            {children}
+            {/* LCD pixel grid overlay */}
+            <div style={{
+              position:'absolute',top:0,left:0,right:0,bottom:0,
+              backgroundImage:'linear-gradient(rgba(0,0,0,0.18) 1px, transparent 1px), linear-gradient(90deg, rgba(0,0,0,0.18) 1px, transparent 1px)',
+              backgroundSize:'3px 3px',
+              pointerEvents:'none',
+              zIndex:2,
+            }} />
+            {/* Scanlines */}
+            <div style={{
+              position:'absolute',top:0,left:0,right:0,bottom:0,
+              backgroundImage:'repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.07) 2px, rgba(0,0,0,0.07) 4px)',
+              pointerEvents:'none',
+              zIndex:3,
+            }} />
+            {/* Subtle teal phosphor tint */}
+            <div style={{
+              position:'absolute',top:0,left:0,right:0,bottom:0,
+              background:'rgba(0,180,160,0.025)',
+              mixBlendMode:'screen',
+              pointerEvents:'none',
+              zIndex:4,
+            }} />
+            {/* Corner reflections */}
+            <div style={{position:'absolute',top:0,left:0,width:60,height:60,background:'radial-gradient(circle at 0 0, rgba(255,255,255,0.04), transparent)',pointerEvents:'none',zIndex:5}} />
+            <div style={{position:'absolute',bottom:0,right:0,width:60,height:60,background:'radial-gradient(circle at 100% 100%, rgba(0,0,0,0.15), transparent)',pointerEvents:'none',zIndex:5}} />
+          </div>
+        </div>
+
+        {/* Bottom GBC body elements */}
+        {!isMobile&&(
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:12,padding:'0 8px'}}>
+            {/* Left speaker grilles */}
+            <div style={{display:'grid',gridTemplateColumns:'repeat(6,5px)',gap:'3px'}}>
+              {Array.from({length:18}).map((_,i)=>(
+                <div key={i} style={{width:5,height:5,borderRadius:'50%',background:'rgba(0,0,0,0.55)',boxShadow:'inset 0 1px 2px rgba(0,0,0,0.8)'}} />
+              ))}
+            </div>
+            {/* Center controls hint */}
+            <div style={{color:'rgba(255,255,255,0.12)',fontSize:8,fontFamily:'monospace',textAlign:'center',letterSpacing:1}}>
+              WASD / ARROWS<br/>ENTER · ESC · TAB
+            </div>
+            {/* Right speaker grilles */}
+            <div style={{display:'grid',gridTemplateColumns:'repeat(6,5px)',gap:'3px'}}>
+              {Array.from({length:18}).map((_,i)=>(
+                <div key={i} style={{width:5,height:5,borderRadius:'50%',background:'rgba(0,0,0,0.55)',boxShadow:'inset 0 1px 2px rgba(0,0,0,0.8)'}} />
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
   return (
-    <div style={{position:'relative',width:'100vw',height:'100vh',background:'#000',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',fontFamily:'"JetBrains Mono","Fira Code",monospace',overflow:'hidden',touchAction:'none',userSelect:'none',WebkitUserSelect:'none'}}>
-      <canvas ref={canvasRef} width={dims.w} height={dims.h} style={{border:'1px solid #111828',borderRadius:4,maxWidth:'100%',maxHeight:isMobile?'50vh':'calc(100vh - 70px)',touchAction:'none'}}/>
+    <div style={{position:'relative',width:'100vw',height:'100vh',background:'#08060e',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',fontFamily:'"JetBrains Mono","Fira Code",monospace',overflow:'hidden',touchAction:'none',userSelect:'none',WebkitUserSelect:'none',
+      // Subtle purple ambient backdrop
+      backgroundImage:'radial-gradient(ellipse at 50% 40%, rgba(80,20,120,0.25) 0%, transparent 65%)',
+    }}>
+      <GBCFrame>
+        <canvas ref={canvasRef} width={dims.w} height={dims.h} style={{display:'block',imageRendering:'pixelated',maxWidth:'100%',maxHeight:isMobile?'48vh':'calc(100vh - 220px)',touchAction:'none'}} />
+      </GBCFrame>
+
       {levelSelectOverlay}
+      {charSelectUI}
       {phoneUI}
       {scoreboardUI}
+
       {isMobile?(
         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'4px 8px',width:'100%',boxSizing:'border-box'}}>
           <div style={{display:'flex',flexDirection:'column',gap:4,flex:1}}>
@@ -475,12 +698,11 @@ export default function DataCenterMaze(){
           <CrossDPad onMove={movePlayer} size={44}/>
         </div>
       ):(
-        <div style={{color:'#556',fontSize:12,marginTop:6,textAlign:'center',lineHeight:1.5}}>
-          <span style={{color:'#0f0'}}>▲</span>=NE <span style={{color:'#0f0'}}>▼</span>=SW <span style={{color:'#0f0'}}>◀</span>=NW <span style={{color:'#0f0'}}>▶</span>=SE
-          {gs?.codeEntry?' · ▲▼ digit · ◀▶ slot · Enter submit · Esc cancel':
-          ' · '}<span onClick={()=>setShowPhone(p=>!p)} style={{color:'#0af',cursor:'pointer',textDecoration:'underline'}}>Codes</span>
+        <div style={{color:'#445',fontSize:11,marginTop:6,textAlign:'center',lineHeight:1.6}}>
+          <span style={{color:'rgba(100,200,255,0.5)'}}>▲</span>=NE <span style={{color:'rgba(100,200,255,0.5)'}}>▼</span>=SW <span style={{color:'rgba(100,200,255,0.5)'}}>◀</span>=NW <span style={{color:'rgba(100,200,255,0.5)'}}>▶</span>=SE
+          {' · '}<span onClick={()=>setShowPhone(p=>!p)} style={{color:'#0af',cursor:'pointer',textDecoration:'underline'}}>Codes</span>
           {' · '}<span onClick={()=>setShowScoreboard(p=>!p)} style={{color:'#ffd700',cursor:'pointer',textDecoration:'underline'}}>Tab: Scores</span>
-          {' · '}<span onClick={()=>initGame(1)} style={{color:'#445',cursor:'pointer',textDecoration:'underline'}}>Restart</span>
+          {' · '}<span onClick={()=>initGame(1)} style={{color:'#334',cursor:'pointer',textDecoration:'underline'}}>Restart</span>
           {gs?.levelComplete&&<span style={{display:'block',marginTop:4}}><button onClick={startNextLevel} style={{background:'#ffd700',color:'#000',border:'none',padding:'6px 16px',borderRadius:4,cursor:'pointer',fontFamily:'inherit',fontWeight:'bold',fontSize:13}}>Next Level</button></span>}
           {gs?.gameOver&&<span style={{display:'block',marginTop:4}}><button onClick={()=>initGame(gs.level)} style={{background:'#ff4444',color:'#fff',border:'none',padding:'6px 16px',borderRadius:4,cursor:'pointer',fontFamily:'inherit',fontWeight:'bold',fontSize:13}}>Retry Level</button></span>}
         </div>
@@ -489,207 +711,202 @@ export default function DataCenterMaze(){
   );
 }
 
-/* ===== SPLASH SCREEN ===== */
-function drawSplash(ctx,W,H,ts,elapsed){
-  ctx.fillStyle='#000';ctx.fillRect(0,0,W,H);
+/* ===== GBC-STYLE SPLASH ===== */
+function drawSplash(ctx,W,H,ts,elapsed,selChar=0){
+  ctx.fillStyle='#020408';ctx.fillRect(0,0,W,H);
   const cx=W/2,cy=H/2;const t=elapsed/1000;
-  // Scanlines
-  ctx.globalAlpha=0.04;ctx.fillStyle='#0af';for(let i=0;i<H;i+=3)ctx.fillRect(0,i,W,1);ctx.globalAlpha=1;
+  // GBC-tinted scanlines
+  ctx.globalAlpha=0.05;for(let i=0;i<H;i+=4){const v=(i%8===0)?'#00aaff':'#004488';ctx.fillStyle=v;ctx.fillRect(0,i,W,2);}ctx.globalAlpha=1;
 
-  // Phase 1: DOS boot text (0-1.5s)
   if(t<4){
-    const bootLines=['C:\\> BIOS CHECK... OK','C:\\> LOADING MAINFRAME OS v3.1','C:\\> INITIALIZING NETWORK STACK...','C:\\> MOUNTING /dev/datacenter','C:\\> WARNING: SECURITY BREACH DETECTED','C:\\> LAUNCHING RECOVERY PROTOCOL...','','C:\\> DATACENTER DISASTER v1.0'];
+    const bootLines=['C:\\> PIVITAL BIOS v1.6 — OK','C:\\> LCD INIT... 160×144 GBC MODE','C:\\> LOADING DATACENTER OS v3.1','C:\\> MOUNTING /dev/server_rack','C:\\> WARNING: SECURITY BREACH','C:\\> RECOVERY PROTOCOL ACTIVE','','C:\\> DATACENTER DISASTER v1.0'];
     ctx.font='13px "JetBrains Mono","Courier New",monospace';ctx.textAlign='left';
     const lineH=20,startY=40;
     for(let i=0;i<bootLines.length;i++){const lineT=t-i*0.18;if(lineT<0)break;
       const chars=Math.min(bootLines[i].length,Math.floor(lineT*40));
-      ctx.fillStyle=bootLines[i].includes('WARNING')?'#ff4444':bootLines[i].includes('DATACENTER')?'#ffd700':'#0f0';
+      ctx.fillStyle=bootLines[i].includes('WARNING')?'#ff4444':bootLines[i].includes('DISASTER')?'#ffd700':bootLines[i].includes('GBC')?'#cc44ff':'#00cc44';
       ctx.fillText(bootLines[i].substring(0,chars),30,startY+i*lineH);
-      // Blinking cursor on current line
-      if(chars<bootLines[i].length&&Math.sin(ts/150)>0){ctx.fillStyle='#0f0';ctx.fillRect(30+chars*7.8,startY+i*lineH-12,8,14);}}
-    // Loading bar
-    if(t>1){const barW=W-80,barH=12,barX=40,barY=startY+bootLines.length*lineH+20;
-      const prog=Math.min(1,(t-1)/2.5);
-      ctx.fillStyle='#111';ctx.fillRect(barX,barY,barW,barH);
-      ctx.fillStyle='#0f0';ctx.fillRect(barX+1,barY+1,(barW-2)*prog,barH-2);
-      ctx.font='9px "JetBrains Mono",monospace';ctx.fillStyle='#0f0';ctx.fillText(`${Math.floor(prog*100)}%`,barX+barW+8,barY+10);}}
+      if(chars<bootLines[i].length&&Math.sin(ts/150)>0){ctx.fillStyle='#00cc44';ctx.fillRect(30+chars*7.8,startY+i*lineH-12,8,14);}}}
 
-  // Phase 2: Title card (fades in from 2s)
   if(t>2){const fadeIn=Math.min(1,(t-2)/0.8);ctx.globalAlpha=fadeIn;
-    // Dark overlay to cover boot text
-    ctx.fillStyle=`rgba(0,0,0,${fadeIn*0.9})`;ctx.fillRect(0,0,W,H);
-
-    // Server rack silhouettes in background
+    ctx.fillStyle=`rgba(2,4,8,${fadeIn*0.92})`;ctx.fillRect(0,0,W,H);
+    // Server rack silhouettes
     const rackW=40,rackH=120,gap=20,numRacks=Math.floor(W/(rackW+gap));
     for(let i=0;i<numRacks;i++){const rx=i*(rackW+gap)+gap/2,ry=cy+30;
-      // Rack body
-      ctx.fillStyle=`rgba(15,18,28,${0.6+Math.sin(ts/1000+i)*0.15})`;ctx.fillRect(rx,ry-rackH,rackW,rackH);
-      ctx.strokeStyle='rgba(30,40,60,0.5)';ctx.lineWidth=0.5;ctx.strokeRect(rx,ry-rackH,rackW,rackH);
-      // Rack slots
-      for(let s=0;s<6;s++){const sy=ry-rackH+8+s*(rackH/6);ctx.fillStyle='rgba(20,25,40,0.8)';ctx.fillRect(rx+3,sy,rackW-6,rackH/6-4);
-        // Blinking LEDs
+      ctx.fillStyle=`rgba(15,12,28,${0.7+Math.sin(ts/1000+i)*0.15})`;ctx.fillRect(rx,ry-rackH,rackW,rackH);
+      ctx.strokeStyle='rgba(80,20,120,0.4)';ctx.lineWidth=0.5;ctx.strokeRect(rx,ry-rackH,rackW,rackH);
+      for(let s=0;s<6;s++){const sy=ry-rackH+8+s*(rackH/6);ctx.fillStyle='rgba(16,8,30,0.8)';ctx.fillRect(rx+3,sy,rackW-6,rackH/6-4);
         for(let l=0;l<3;l++){const on=Math.sin(ts/300+i*2+s*1.5+l*3)>0.3;
-          ctx.fillStyle=on?(['#00ff44','#ff2244','#0088ff','#ffaa00'][(i+s+l)%4]):'#111';
-          ctx.beginPath();ctx.arc(rx+rackW-8+l*3,sy+5,1.2,0,Math.PI*2);ctx.fill();}}}
-    // Spark effects on random racks
-    for(let sp=0;sp<3;sp++){const sx=((Math.sin(ts/400+sp*7)*0.5+0.5)*W*0.8)+W*0.1;
-      const sy=cy-50-Math.random()*40;ctx.fillStyle=`rgba(255,${150+Math.floor(Math.random()*100)},0,${0.3+Math.random()*0.4})`;
+          ctx.fillStyle=on?(['#00ff44','#ff2244','#0088ff','#cc44ff','#ffaa00'][(i+s+l)%5]):'#111';
+          ctx.beginPath();ctx.arc(rx+rackW-8+l*4,sy+5,1.4,0,Math.PI*2);ctx.fill();}}}
+    // Sparks
+    for(let sp=0;sp<4;sp++){const sx=((Math.sin(ts/400+sp*7)*0.5+0.5)*W*0.8)+W*0.1;
+      const sy=cy-50-Math.random()*40;ctx.fillStyle=`rgba(${150+Math.floor(Math.random()*100)},${50+Math.floor(Math.random()*80)},255,${0.4+Math.random()*0.4})`;
       ctx.beginPath();ctx.arc(sx,sy,1+Math.random()*2,0,Math.PI*2);ctx.fill();}
-
     // Title: DATACENTER
-    ctx.font=`bold ${Math.min(60,W*0.07)}px "JetBrains Mono","Fira Code",monospace`;ctx.textAlign='center';ctx.textBaseline='middle';
-    // Glow effect
-    ctx.shadowBlur=20;ctx.shadowColor='#0af';ctx.fillStyle='#0af';ctx.fillText('DATACENTER',cx,cy-70);
-    ctx.shadowBlur=0;
+    ctx.font=`bold ${Math.min(56,W*0.065)}px "JetBrains Mono","Fira Code",monospace`;ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.shadowBlur=22;ctx.shadowColor='#8844ff';ctx.fillStyle='#aa66ff';ctx.fillText('DATACENTER',cx,cy-72);ctx.shadowBlur=0;
     // Title: DISASTER
-    ctx.font=`bold ${Math.min(72,W*0.085)}px "JetBrains Mono","Fira Code",monospace`;
-    ctx.shadowBlur=25;ctx.shadowColor='#ff2244';ctx.fillStyle='#ff2244';ctx.fillText('DISASTER',cx,cy-20);
-    ctx.shadowBlur=0;
+    ctx.font=`bold ${Math.min(68,W*0.08)}px "JetBrains Mono","Fira Code",monospace`;
+    ctx.shadowBlur=28;ctx.shadowColor='#ff2244';ctx.fillStyle='#ff3355';ctx.fillText('DISASTER',cx,cy-20);ctx.shadowBlur=0;
     // Subtitle
-    ctx.font=`${Math.min(14,W*0.018)}px "JetBrains Mono",monospace`;ctx.fillStyle='#556';
+    ctx.font=`${Math.min(13,W*0.017)}px "JetBrains Mono",monospace`;ctx.fillStyle='#503060';
     ctx.fillText('A PIVITAL SYSTEMS GAME',cx,cy+15);
-
-    // Electrical arc across title
-    if(Math.sin(ts/500)>0.7){ctx.strokeStyle='rgba(0,170,255,0.6)';ctx.lineWidth=1.5;ctx.shadowBlur=8;ctx.shadowColor='#0af';
+    // GBC badge
+    ctx.fillStyle='rgba(160,80,220,0.15)';ctx.beginPath();ctx.roundRect(cx-60,cy+22,120,16,4);ctx.fill();
+    ctx.font='7px "JetBrains Mono",monospace';ctx.fillStyle='rgba(200,120,255,0.5)';ctx.fillText('GAME PIXEL COLOR™',cx,cy+31);
+    // Electric arc
+    if(Math.sin(ts/500)>0.7){ctx.strokeStyle='rgba(160,80,255,0.7)';ctx.lineWidth=1.5;ctx.shadowBlur=10;ctx.shadowColor='#8844ff';
       ctx.beginPath();let ax=cx-120,ay=cy-45;ctx.moveTo(ax,ay);
       for(let i=0;i<6;i++){ax+=40+Math.random()*10;ay=cy-45+(Math.random()-0.5)*30;ctx.lineTo(ax,ay);}ctx.stroke();ctx.shadowBlur=0;}
-
-    // "PRESS ANY KEY" blink (after 3s)
+    // Press any key
     if(t>3.5){const blink=Math.sin(ts/400)>0?1:0.2;ctx.globalAlpha=blink*fadeIn;
-      ctx.font=`bold ${Math.min(18,W*0.025)}px "JetBrains Mono",monospace`;ctx.fillStyle='#ffd700';
-      ctx.fillText('PRESS ANY KEY TO START',cx,cy+60);
-      ctx.globalAlpha=fadeIn;}
-
-    // Copyright / version
-    ctx.font=`${Math.min(10,W*0.013)}px "JetBrains Mono",monospace`;ctx.fillStyle='#334';
-    ctx.fillText('2026 PIVITAL SYSTEMS',cx,H-20);
-    ctx.globalAlpha=1;}
+      ctx.font=`bold ${Math.min(17,W*0.024)}px "JetBrains Mono",monospace`;ctx.fillStyle='#ffd700';
+      ctx.fillText('PRESS ANY KEY TO START',cx,cy+58);ctx.globalAlpha=fadeIn;}
+    ctx.font=`${Math.min(10,W*0.013)}px "JetBrains Mono",monospace`;ctx.fillStyle='#2a1440';
+    ctx.fillText('2026 PIVITAL SYSTEMS',cx,H-20);ctx.globalAlpha=1;}
 
   // CRT vignette
   const vg=ctx.createRadialGradient(cx,cy,W*0.25,cx,cy,Math.max(W,H)*0.6);
-  vg.addColorStop(0,'rgba(0,0,0,0)');vg.addColorStop(0.8,'rgba(0,0,0,0.15)');vg.addColorStop(1,'rgba(0,0,0,0.6)');ctx.fillStyle=vg;ctx.fillRect(0,0,W,H);}
+  vg.addColorStop(0,'rgba(0,0,0,0)');vg.addColorStop(0.8,'rgba(0,0,0,0.12)');vg.addColorStop(1,'rgba(0,0,0,0.65)');ctx.fillStyle=vg;ctx.fillRect(0,0,W,H);}
 
-/* ===== FLOOR ===== */
-function drawFloor(ctx,x,y,br,glowTs,gx,gy){const hw=TW/2,hh=TH/2;ctx.save();ctx.globalAlpha=1;
+/* ===== FLOOR — GBC color palette with colored light tinting ===== */
+function drawFloor(ctx,x,y,br,glowTs,gx,gy,cb){
+  const hw=TW/2,hh=TH/2;ctx.save();ctx.globalAlpha=1;
   ctx.beginPath();ctx.moveTo(x,y-hh);ctx.lineTo(x+hw,y);ctx.lineTo(x,y+hh);ctx.lineTo(x-hw,y);ctx.closePath();
-  // Per-tile brightness variation
-  const tv=gx!==undefined?Math.floor((tR(gx,gy,123)-0.5)*6):0;
-  const fb=Math.floor(4+br*28)+tv;ctx.fillStyle=`rgb(${fb},${fb+1},${fb+5})`;ctx.fill();
-  if(glowTs>0){const pulse=0.25+Math.sin(glowTs/400)*0.12;ctx.fillStyle=`rgba(255,200,0,${pulse*Math.max(0.2,br)})`;ctx.fill();}
-  if(br>0.025){ctx.beginPath();ctx.moveTo(x,y-hh);ctx.lineTo(x+hw,y);ctx.lineTo(x,y+hh);ctx.lineTo(x-hw,y);ctx.closePath();ctx.clip();
-    const subN=4,lc=`rgba(${30+Math.floor(br*35)},${32+Math.floor(br*35)},${42+Math.floor(br*40)},${Math.min(0.8,br*1.5)})`;ctx.strokeStyle=lc;ctx.lineWidth=0.4;
+  // Per-tile noise variation (GBC-era dithered look)
+  const tv=gx!==undefined?Math.floor((tR(gx,gy,123)-0.5)*5):0;
+  const fb=Math.floor(3+br*22)+tv;
+  // Dithered fog edge using Bayer matrix
+  let effectiveBr=br;
+  if(br>0.005&&br<0.15&&gx!==undefined){
+    const bv=BAYER[(gy&3)][((gx)&3)]/16;
+    if(br<bv*0.15)effectiveBr=0;}
+  if(effectiveBr<0.005){ctx.restore();return;}
+  // Apply colored light bias (colored light from nearby broken servers/items)
+  const rBias=cb?cb.r*effectiveBr*80:0;
+  const gBias=cb?cb.g*effectiveBr*80:0;
+  const bBias=cb?cb.b*effectiveBr*80:0;
+  // GBC-teal floor base (shifted blue-teal vs original grey)
+  const flR=Math.min(255,Math.max(0,fb+Math.floor(rBias)));
+  const flG=Math.min(255,Math.max(0,fb+Math.floor(effectiveBr*8)+Math.floor(gBias)));
+  const flB=Math.min(255,Math.max(0,fb+Math.floor(effectiveBr*14)+Math.floor(bBias)));
+  ctx.fillStyle=`rgb(${flR},${flG},${flB})`;ctx.fill();
+  if(glowTs>0){const pulse=0.25+Math.sin(glowTs/400)*0.12;ctx.fillStyle=`rgba(255,200,0,${pulse*Math.max(0.2,effectiveBr)})`;ctx.fill();}
+  if(effectiveBr>0.025){
+    ctx.beginPath();ctx.moveTo(x,y-hh);ctx.lineTo(x+hw,y);ctx.lineTo(x,y+hh);ctx.lineTo(x-hw,y);ctx.closePath();ctx.clip();
+    const subN=4;
+    const lc=`rgba(${20+Math.floor(effectiveBr*28)},${22+Math.floor(effectiveBr*32)},${35+Math.floor(effectiveBr*42)},${Math.min(0.75,effectiveBr*1.5)})`;
+    ctx.strokeStyle=lc;ctx.lineWidth=0.4;
     for(let i=1;i<subN;i++){const t=i/subN;ctx.beginPath();ctx.moveTo(x-hw+hw*t,y-hh*t);ctx.lineTo(x+hw*t,y+hh*(1-t));ctx.stroke();ctx.beginPath();ctx.moveTo(x+hw-hw*t,y-hh*t);ctx.lineTo(x-hw*t,y+hh*(1-t));ctx.stroke();}}
   ctx.restore();}
 
 function drawTool(ctx,x,y,toolType,ts,br){ctx.save();
   const tt=TOOL_TYPES[toolType];const bob=Math.sin(ts/350+toolType*1.8)*4;
   const tx=x,ty=y-RH+8+bob;ctx.globalAlpha=Math.min(1,br*2+0.15);
-  ctx.shadowBlur=10;ctx.shadowColor=tt.hex;
-  // Tool body (wrench/key shape)
+  ctx.shadowBlur=12;ctx.shadowColor=tt.hex;
   ctx.fillStyle=tt.hex;ctx.beginPath();
   ctx.moveTo(tx-5,ty-1);ctx.lineTo(tx+3,ty-4);ctx.lineTo(tx+6,ty-2);ctx.lineTo(tx-2,ty+1);ctx.closePath();ctx.fill();
   ctx.fillStyle=`rgba(${Math.floor(tt.r*0.7)},${Math.floor(tt.g*0.7)},${Math.floor(tt.b*0.7)},1)`;
   ctx.beginPath();ctx.moveTo(tx-5,ty-1);ctx.lineTo(tx-2,ty+1);ctx.lineTo(tx-2,ty-3);ctx.lineTo(tx-5,ty-5);ctx.closePath();ctx.fill();
-  // Handle
-  ctx.fillStyle='#888';ctx.fillRect(tx+3,ty-4,2,3);
-  ctx.shadowBlur=0;
+  ctx.fillStyle='#888';ctx.fillRect(tx+3,ty-4,2,3);ctx.shadowBlur=0;
   ctx.globalAlpha=0.15*Math.min(1,br);ctx.fillStyle=tt.hex;ctx.beginPath();ctx.ellipse(x,y,8,4,0,0,Math.PI*2);ctx.fill();
   ctx.globalAlpha=1;ctx.restore();}
 
 function drawUsbStick(ctx,x,y,colorIndex,ts,br){ctx.save();
   const col=USB_COLORS[colorIndex];const bob=Math.sin(ts/400+colorIndex*1.5)*4;
   const ux=x,uy=y-RH+8+bob;ctx.globalAlpha=Math.min(1,br*2+0.15);
-  // Glow
-  ctx.shadowBlur=10;ctx.shadowColor=col.hex;
-  // USB body (small isometric rectangle)
+  ctx.shadowBlur=12;ctx.shadowColor=col.hex;
   ctx.fillStyle=col.hex;ctx.beginPath();
   ctx.moveTo(ux-4,uy-2);ctx.lineTo(ux+2,uy-5);ctx.lineTo(ux+6,uy-3);ctx.lineTo(ux,uy);ctx.closePath();ctx.fill();
-  // USB top
   ctx.fillStyle=col.led;ctx.beginPath();
   ctx.moveTo(ux-4,uy-2);ctx.lineTo(ux+2,uy-5);ctx.lineTo(ux+2,uy-9);ctx.lineTo(ux-4,uy-6);ctx.closePath();ctx.fill();
-  // USB side
   ctx.fillStyle=`rgba(${Math.floor(col.r*0.6)},${Math.floor(col.g*0.6)},${Math.floor(col.b*0.6)},1)`;ctx.beginPath();
   ctx.moveTo(ux+2,uy-5);ctx.lineTo(ux+6,uy-3);ctx.lineTo(ux+6,uy-7);ctx.lineTo(ux+2,uy-9);ctx.closePath();ctx.fill();
-  // Connector tab
   ctx.fillStyle='#aaa';ctx.beginPath();
   ctx.moveTo(ux-2,uy-6.5);ctx.lineTo(ux+1,uy-8);ctx.lineTo(ux+1,uy-10);ctx.lineTo(ux-2,uy-8.5);ctx.closePath();ctx.fill();
   ctx.shadowBlur=0;
-  // Floor highlight
   ctx.globalAlpha=0.15*Math.min(1,br);ctx.fillStyle=col.hex;ctx.beginPath();ctx.ellipse(x,y,8,4,0,0,Math.PI*2);ctx.fill();
   ctx.globalAlpha=1;ctx.restore();}
 
-/*
- * SERVER RACK — iso-parallel bottom edges
- * Top diamond at y-RH, bottom diamond at y (the floor tile)
- * Left face: (x-hw, y-RH) → (x, y+hh-RH) → (x, y+hh) → (x-hw, y)
- * Right face: (x+hw, y-RH) → (x, y+hh-RH) → (x, y+hh) → (x+hw, y)
- * Bottom edges are parallel to top edges.
- */
-function drawRack(ctx,x,y,br,ts,srv,gx,gy,goldTs,bsInfo){
+/* ===== SERVER RACK — GBC-tinted surfaces + colored light + specular highlights ===== */
+function drawRack(ctx,x,y,br,ts,srv,gx,gy,goldTs,bsInfo,cb){
   const hw=TW/2,hh=TH/2,rH=RH,type=srv?srv.type:'tall',m=br;
-  const leftC=`rgb(${Math.floor(6+m*52)},${Math.floor(7+m*56)},${Math.floor(10+m*72)})`;
-  const rightC=`rgb(${Math.floor(8+m*60)},${Math.floor(9+m*64)},${Math.floor(12+m*82)})`;
-  const topC=`rgb(${Math.floor(10+m*68)},${Math.floor(11+m*72)},${Math.floor(15+m*90)})`;
-  const lineC=`rgba(${Math.floor(20+m*80)},${Math.floor(22+m*85)},${Math.floor(30+m*100)},${0.3+m*0.5})`;
+  // Color bias from nearby sources
+  const cbR=cb?cb.r*m*50:0,cbG=cb?cb.g*m*50:0,cbB=cb?cb.b*m*50:0;
+  // GBC-tinted rack faces: shifted slightly more purple-blue
+  const leftC=`rgb(${Math.min(255,Math.floor(6+m*48)+Math.floor(cbR))},${Math.min(255,Math.floor(7+m*52)+Math.floor(cbG))},${Math.min(255,Math.floor(12+m*75)+Math.floor(cbB))})`;
+  const rightC=`rgb(${Math.min(255,Math.floor(8+m*56)+Math.floor(cbR*0.8))},${Math.min(255,Math.floor(9+m*60)+Math.floor(cbG*0.8))},${Math.min(255,Math.floor(14+m*85)+Math.floor(cbB*0.8))})`;
+  const topC=`rgb(${Math.min(255,Math.floor(10+m*64)+Math.floor(cbR*1.2))},${Math.min(255,Math.floor(11+m*68)+Math.floor(cbG*1.2))},${Math.min(255,Math.floor(17+m*92)+Math.floor(cbB*1.2))})`;
+  const lineC=`rgba(${Math.floor(20+m*75)},${Math.floor(22+m*80)},${Math.floor(32+m*105)},${0.3+m*0.5})`;
   const lineDk=`rgba(0,0,0,${0.1+m*0.2})`;
   ctx.save();ctx.globalAlpha=1;
 
   // Top face
   ctx.beginPath();ctx.moveTo(x,y-hh-rH);ctx.lineTo(x+hw,y-rH);ctx.lineTo(x,y+hh-rH);ctx.lineTo(x-hw,y-rH);ctx.closePath();ctx.fillStyle=topC;ctx.fill();
+  // Specular highlight on top (GBC-era sheen)
+  if(m>0.3){const specX=x-hw*0.3,specY=y-rH-hh*0.3;
+    const spg=ctx.createRadialGradient(specX,specY,0,specX,specY,hw*0.8);
+    spg.addColorStop(0,`rgba(180,200,255,${m*0.08})`);spg.addColorStop(1,'transparent');
+    ctx.fillStyle=spg;
+    ctx.beginPath();ctx.moveTo(x,y-hh-rH);ctx.lineTo(x+hw,y-rH);ctx.lineTo(x,y+hh-rH);ctx.lineTo(x-hw,y-rH);ctx.closePath();ctx.fill();}
 
-  // Left face — bottom edge: (x-hw, y) to (x, y+hh) — parallel to top
+  // Left face
   ctx.beginPath();ctx.moveTo(x-hw,y-rH);ctx.lineTo(x,y+hh-rH);ctx.lineTo(x,y+hh);ctx.lineTo(x-hw,y);ctx.closePath();ctx.fillStyle=leftC;ctx.fill();
-
-  // Left face iso-parallel rack lines (visible at medium+ brightness)
   const sc=type==='blade'?8:type==='network'?5:type==='storage'?7:type==='wide'?4:6;
   if(m>0.1){for(let i=1;i<sc;i++){const off=i*(rH/sc);ctx.beginPath();ctx.moveTo(x-hw,y-rH+off);ctx.lineTo(x,y+hh-rH+off);ctx.strokeStyle=lineC;ctx.lineWidth=0.6;ctx.stroke();}}
-  // Left face details (visible at high brightness)
   if(m>0.3){for(let i=0;i<sc;i++){const oT=i*(rH/sc)+2,oB=(i+1)*(rH/sc)-2,mid=(oT+oB)/2;
     if(type==='blade'){for(let v=1;v<6;v++){const t=v/6,vx=x-hw+hw*t;ctx.beginPath();ctx.moveTo(vx,y-rH+oT+hh*t);ctx.lineTo(vx,y-rH+oB+hh*t);ctx.strokeStyle=lineDk;ctx.lineWidth=0.4;ctx.stroke();}}
     else if(type==='network'){for(let r=0;r<2;r++)for(let c=1;c<7;c++){const t=c/7;ctx.fillStyle=`rgb(${Math.floor(4+m*28)},${Math.floor(5+m*30)},${Math.floor(8+m*38)})`;ctx.beginPath();ctx.arc(x-hw+hw*t,y-rH+oT+3+r*4+hh*t,1.2,0,Math.PI*2);ctx.fill();}}
-    else if(type==='storage'){const hOff=oT+2;ctx.beginPath();ctx.moveTo(x-hw+hw*0.3,y-rH+hOff+hh*0.3);ctx.lineTo(x-hw+hw*0.7,y-rH+hOff+hh*0.7);ctx.strokeStyle=`rgba(${Math.floor(40+m*80)},${Math.floor(42+m*82)},${Math.floor(55+m*95)},${0.3+m*0.5})`;ctx.lineWidth=1.2;ctx.stroke();}
+    else if(type==='storage'){const hOff=oT+2;ctx.beginPath();ctx.moveTo(x-hw+hw*0.3,y-rH+hOff+hh*0.3);ctx.lineTo(x-hw+hw*0.7,y-rH+hOff+hh*0.7);ctx.strokeStyle=`rgba(${Math.floor(40+m*80)},${Math.floor(42+m*82)},${Math.floor(60+m*100)},${0.3+m*0.5})`;ctx.lineWidth=1.2;ctx.stroke();}
     else{for(let v=1;v<5;v++){const t=v/5,vx=x-hw+hw*t;ctx.beginPath();ctx.moveTo(vx,y-rH+oT+hh*t);ctx.lineTo(vx,y-rH+oB+hh*t);ctx.strokeStyle=lineDk;ctx.lineWidth=0.4;ctx.stroke();}}
-    const scC=`rgb(${Math.floor(12+m*50)},${Math.floor(13+m*52)},${Math.floor(18+m*65)})`;ctx.fillStyle=scC;
+    const scC=`rgb(${Math.floor(12+m*50)},${Math.floor(13+m*52)},${Math.floor(20+m*68)})`;ctx.fillStyle=scC;
     ctx.beginPath();ctx.arc(x-hw+hw*0.08,y-rH+mid+hh*0.08,1.2,0,Math.PI*2);ctx.fill();
     ctx.beginPath();ctx.arc(x-hw+hw*0.92,y-rH+mid+hh*0.92,1.2,0,Math.PI*2);ctx.fill();}}
 
-  // Right face — bottom edge: (x, y+hh) to (x+hw, y) — parallel to top
+  // Right face
   ctx.beginPath();ctx.moveTo(x+hw,y-rH);ctx.lineTo(x,y+hh-rH);ctx.lineTo(x,y+hh);ctx.lineTo(x+hw,y);ctx.closePath();ctx.fillStyle=rightC;ctx.fill();
   if(m>0.1){for(let i=1;i<sc;i++){const off=i*(rH/sc);ctx.beginPath();ctx.moveTo(x,y+hh-rH+off);ctx.lineTo(x+hw,y-rH+off);ctx.strokeStyle=lineC;ctx.lineWidth=0.6;ctx.stroke();}}
 
+  // Ambient occlusion at wall base (darkens the contact edge with floor)
+  if(m>0.05){const aoG=ctx.createLinearGradient(x-hw,y-4,x,y+hh+2);
+    aoG.addColorStop(0,`rgba(0,0,0,${0.22*m})`);aoG.addColorStop(1,'rgba(0,0,0,0)');
+    ctx.globalAlpha=0.5;ctx.fillStyle=aoG;
+    ctx.beginPath();ctx.moveTo(x-hw,y);ctx.lineTo(x,y+hh);ctx.lineTo(x,y+hh-4);ctx.lineTo(x-hw,y-4);ctx.closePath();ctx.fill();
+    ctx.beginPath();ctx.moveTo(x+hw,y);ctx.lineTo(x,y+hh);ctx.lineTo(x,y+hh-4);ctx.lineTo(x+hw,y-4);ctx.closePath();ctx.fill();
+    ctx.globalAlpha=1;}
+
   // LEDs
   if(bsInfo&&!bsInfo.fixed){const col=bsInfo.toolType>=0?TOOL_TYPES[bsInfo.toolType]:USB_COLORS[bsInfo.colorIndex];
-    if(srv){srv.lights.forEach(l=>{const bv=Math.sin(ts/150+l.offset*2);const vis=Math.max(0.3,(bv*0.5+0.5)*Math.min(1,m*3));ctx.globalAlpha=vis;ctx.shadowBlur=6;ctx.shadowColor=col.hex;ctx.fillStyle=col.led;ctx.beginPath();ctx.arc(x+hw*l.xPos,y-rH+rH*l.yPos,2.5,0,Math.PI*2);ctx.fill();ctx.shadowBlur=0;ctx.globalAlpha=1;});}
-    // Additional dramatic LEDs on left face
-    for(let i=0;i<4;i++){const bv=Math.sin(ts/120+i*1.5);const vis=Math.max(0.2,(bv*0.5+0.5)*Math.min(1,m*3));ctx.globalAlpha=vis;ctx.shadowBlur=5;ctx.shadowColor=col.hex;ctx.fillStyle=col.led;
+    if(srv){srv.lights.forEach(l=>{const bv=Math.sin(ts/150+l.offset*2);const vis=Math.max(0.3,(bv*0.5+0.5)*Math.min(1,m*3));ctx.globalAlpha=vis;ctx.shadowBlur=8;ctx.shadowColor=col.hex;ctx.fillStyle=col.led;ctx.beginPath();ctx.arc(x+hw*l.xPos,y-rH+rH*l.yPos,2.5,0,Math.PI*2);ctx.fill();ctx.shadowBlur=0;ctx.globalAlpha=1;});}
+    for(let i=0;i<4;i++){const bv=Math.sin(ts/120+i*1.5);const vis=Math.max(0.2,(bv*0.5+0.5)*Math.min(1,m*3));ctx.globalAlpha=vis;ctx.shadowBlur=7;ctx.shadowColor=col.hex;ctx.fillStyle=col.led;
       const lt=0.15+i*0.2,ly=0.15+i*0.22;ctx.beginPath();ctx.arc(x-hw+hw*lt,y-rH+rH*ly+hh*lt,2,0,Math.PI*2);ctx.fill();ctx.shadowBlur=0;ctx.globalAlpha=1;}}
   else if(srv){srv.lights.forEach(l=>{const bv=Math.sin(ts/1000*l.blink+l.offset);if(bv>-0.2){const vis=Math.max(0.12,Math.max(0,(bv+0.2)/1.2)*Math.min(1,m*2.5));ctx.globalAlpha=vis;ctx.fillStyle=l.color;ctx.beginPath();ctx.arc(x+hw*l.xPos,y-rH+rH*l.yPos,1.4,0,Math.PI*2);ctx.fill();ctx.globalAlpha=1;}});}
-  // Cables (visible at medium+ brightness)
+
+  // Cables
   if(srv&&m>0.2){const nC=type==='network'?4:type==='blade'?3:2;const cC=[[0,70,160],[160,40,0],[0,130,80],[100,0,120]];
     for(let ci=0;ci<nC;ci++){const cx0=x-hw+2+ci*2.5,cy0=y-rH+6+ci*5,cmx=x-hw-2-ci*1.5,cmy=y-rH*0.45+ci*3,cex=x-hw+1+ci*2,cey=y-4-ci,cc=cC[ci%4];
-      ctx.beginPath();ctx.moveTo(cx0,cy0);ctx.bezierCurveTo(cmx,cmy,cmx+1,cmy+6,cex,cey);ctx.strokeStyle=`rgb(${Math.floor(8+m*22)},${Math.floor(8+m*22)},${Math.floor(12+m*30)})`;ctx.lineWidth=1.8-ci*0.2;ctx.stroke();
+      ctx.beginPath();ctx.moveTo(cx0,cy0);ctx.bezierCurveTo(cmx,cmy,cmx+1,cmy+6,cex,cey);ctx.strokeStyle=`rgb(${Math.floor(8+m*22)},${Math.floor(8+m*22)},${Math.floor(14+m*32)})`;ctx.lineWidth=1.8-ci*0.2;ctx.stroke();
       if(m>0.08){ctx.beginPath();ctx.moveTo(cx0,cy0);ctx.bezierCurveTo(cmx,cmy,cmx+1,cmy+6,cex,cey);ctx.strokeStyle=`rgba(${cc[0]},${cc[1]},${cc[2]},${0.1+m*0.4})`;ctx.lineWidth=0.6;ctx.stroke();}}}
-  // Center seam
+
   ctx.beginPath();ctx.moveTo(x,y+hh-rH);ctx.lineTo(x,y+hh);ctx.strokeStyle=lineC;ctx.lineWidth=0.5;ctx.stroke();
 
-  // Broken server color pulsing overlay
+  // Broken server pulsing overlay (colored)
   if(bsInfo&&!bsInfo.fixed){const col=bsInfo.toolType>=0?TOOL_TYPES[bsInfo.toolType]:USB_COLORS[bsInfo.colorIndex];const pulse=0.08+Math.sin(ts/200)*0.06;
     ctx.globalAlpha=pulse*Math.max(0.2,m);ctx.fillStyle=`rgba(${col.r},${col.g},${col.b},0.5)`;
     ctx.beginPath();ctx.moveTo(x-hw,y-rH);ctx.lineTo(x,y+hh-rH);ctx.lineTo(x,y+hh);ctx.lineTo(x-hw,y);ctx.closePath();ctx.fill();
     ctx.beginPath();ctx.moveTo(x+hw,y-rH);ctx.lineTo(x,y+hh-rH);ctx.lineTo(x,y+hh);ctx.lineTo(x+hw,y);ctx.closePath();ctx.fill();
     ctx.globalAlpha=1;}
-  // Golden glow overlay on rack faces if this is a drive tile neighbor
   else if(goldTs>0){const pulse=0.12+Math.sin(goldTs/400)*0.06;
     ctx.globalAlpha=pulse*Math.max(0.2,m);ctx.fillStyle='rgba(255,200,0,0.5)';
     ctx.beginPath();ctx.moveTo(x-hw,y-rH);ctx.lineTo(x,y+hh-rH);ctx.lineTo(x,y+hh);ctx.lineTo(x-hw,y);ctx.closePath();ctx.fill();
     ctx.beginPath();ctx.moveTo(x+hw,y-rH);ctx.lineTo(x,y+hh-rH);ctx.lineTo(x,y+hh);ctx.lineTo(x+hw,y);ctx.closePath();ctx.fill();
     ctx.globalAlpha=1;}
-
   ctx.restore();}
 
 /* ===== CODE ENTRY ===== */
 function drawCodeEntry(ctx,W,H,g){const ce=g.codeEntry;
-  ctx.fillStyle='rgba(0,0,0,0.75)';ctx.fillRect(0,0,W,H);const cx=W/2,cy=H/2-20;
+  ctx.fillStyle='rgba(0,0,0,0.78)';ctx.fillRect(0,0,W,H);const cx=W/2,cy=H/2-20;
   ctx.font='bold 18px "JetBrains Mono",monospace';ctx.fillStyle='#ffd700';ctx.textAlign='center';ctx.textBaseline='middle';
   ctx.fillText(`◆ DRIVE ${ce.driveId+1} — ENTER ACCESS CODE ◆`,cx,cy-60);
   const bW=50,bH2=60,gap=12,totalW=bW*4+gap*3;const sX=cx-totalW/2;
@@ -705,16 +922,17 @@ function drawCodeEntry(ctx,W,H,g){const ce=g.codeEntry;
   else{ctx.fillStyle='#0f0';ctx.fillText(frags.map(f=>`Slot${f.position+1}=${f.digit}`).join('   '),cx,cy+75);}
   ctx.font='11px "JetBrains Mono",monospace';ctx.fillStyle='#445';ctx.fillText('▲▼ change digit · ◀▶ move slot · Enter submit · Esc cancel',cx,cy+105);}
 
-/* ===== CYBERDECK POPUP ===== */
+/* ===== CYBERDECK ===== */
 function drawCyberdeck(ctx,W,H,g){const cd=g.cyberdeckEntry;if(!cd)return;
   const isToolMode=cd.useTools;
   const accentCol=isToolMode?TOOL_TYPES[cd.toolType]:USB_COLORS[cd.colorIndex];
   const t=cd.timer;
-  ctx.fillStyle='rgba(0,0,0,0.8)';ctx.fillRect(0,0,W,H);
+  ctx.fillStyle='rgba(0,0,0,0.82)';ctx.fillRect(0,0,W,H);
   const cx=W/2,cy=H/2,bw=360,bh=240;
-  ctx.strokeStyle=accentCol.hex;ctx.lineWidth=2;ctx.fillStyle='rgba(5,8,15,0.95)';
+  ctx.strokeStyle=accentCol.hex;ctx.lineWidth=2;ctx.fillStyle='rgba(4,6,14,0.96)';
   ctx.fillRect(cx-bw/2,cy-bh/2,bw,bh);ctx.strokeRect(cx-bw/2,cy-bh/2,bw,bh);
-  ctx.globalAlpha=0.03;ctx.fillStyle=accentCol.hex;for(let i=0;i<bh;i+=3)ctx.fillRect(cx-bw/2,cy-bh/2+i,bw,1);ctx.globalAlpha=1;
+  // GBC-style scanlines in dialog
+  ctx.globalAlpha=0.04;ctx.fillStyle=accentCol.hex;for(let i=0;i<bh;i+=3)ctx.fillRect(cx-bw/2,cy-bh/2+i,bw,1);ctx.globalAlpha=1;
   ctx.fillStyle=`rgba(${accentCol.r},${accentCol.g},${accentCol.b},0.15)`;ctx.fillRect(cx-bw/2,cy-bh/2,bw,24);
   ctx.font='bold 11px "JetBrains Mono",monospace';ctx.textAlign='left';ctx.textBaseline='middle';
   ctx.fillStyle=accentCol.hex;ctx.fillText('CYBERDECK v2.1 — SERVER DIAGNOSTIC',cx-bw/2+10,cy-bh/2+12);
@@ -722,8 +940,7 @@ function drawCyberdeck(ctx,W,H,g){const cd=g.cyberdeckEntry;if(!cd)return;
   const itemName=isToolMode?TOOL_TYPES[cd.toolType].name.toUpperCase():USB_COLORS[cd.colorIndex].name.toUpperCase();
   const itemLabel=isToolMode?'TOOL':'USB STICK';
   if(cd.phase==='denied'){
-    if(t<40){ctx.fillStyle=accentCol.hex;ctx.fillText('> SCANNING...',cx-bw/2+12,ly);
-      const dots='.'.repeat(Math.floor(t/10)%4);ctx.fillText(`  ${dots}`,cx-bw/2+120,ly);}
+    if(t<40){ctx.fillStyle=accentCol.hex;ctx.fillText('> SCANNING...',cx-bw/2+12,ly);}
     else if(t<80){ctx.fillStyle=accentCol.hex;ctx.fillText('> SCANNING... COMPLETE',cx-bw/2+12,ly);
       ctx.fillStyle='#ff4444';ctx.fillText(`> REQUIRES ${itemLabel}: ${itemName}`,cx-bw/2+12,ly+lh);}
     else{ctx.fillStyle=accentCol.hex;ctx.fillText('> SCANNING... COMPLETE',cx-bw/2+12,ly);
@@ -742,129 +959,130 @@ function drawCyberdeck(ctx,W,H,g){const cd=g.cyberdeckEntry;if(!cd)return;
     ctx.fillStyle=accentCol.hex;ctx.fillRect(cx-bw/2+12,cy+bh/2-30,(bw-24)*prog,8);}
   ctx.textAlign='left';}
 
-/* ===== AGENT — taller, centered, clean head ===== */
-function drawAgent(ctx,x,y,ts,player,walk){ctx.save();const f=player.facing;
+/* ===== AGENT — sprite-based ===== */
+function drawAgent(ctx,x,y,ts,player,walk,charIdx=0){
+  const FRAMES=8;
+  const isMoving=walk.moving;
+  const frame=isMoving?Math.floor((walk.walkCycle/1.76)*FRAMES)%FRAMES:0;
+  const row=DIR_ROW[player.facing]??0;
+
+  // Soft ground shadow
+  ctx.save();
+  ctx.beginPath();ctx.ellipse(x,y-2,22,8,0,0,Math.PI*2);
+  ctx.fillStyle='rgba(0,0,0,0.22)';ctx.fill();
+  ctx.restore();
+
+  const ci=charIdx||0;
+  if(_charReady[ci]){
+    const sw=_charW[ci], sh=_charH[ci];
+    const scale=0.5;
+    const dw=sw*scale, dh=sh*scale;
+    ctx.save();
+    ctx.drawImage(_charImgs[ci], frame*sw, row*sh, sw, sh,
+                  x-dw/2, y-dh+8, dw, dh);
+    ctx.restore();
+  } else {
+    _drawAgentFallback(ctx,x,y,ts,player,walk);
+  }
+}
+
+function _drawAgentFallback(ctx,x,y,ts,player,walk){ctx.save();const f=player.facing;
   const isM=walk.moving||Math.abs(walk.x-player.x)>0.05||Math.abs(walk.y-player.y)>0.05;
   const wP=isM?walk.walkCycle:0,stride=isM?Math.sin(wP):0,bob=isM?Math.abs(Math.sin(wP))*1.2:0;
   const isBack=f==='nw'||f==='ne';
   const fc={nw:{dx:-1,fx:-1,as:-1},ne:{dx:1,fx:1,as:1},sw:{dx:-1,fx:-1,as:-1},se:{dx:1,fx:1,as:1}};
   const cf=fc[f],dx=cf.dx;
-  // Realistic proportions: ~52px total. Head=7, neck=2, torso=16, legs=27
-  const footY=y-2;
-  const hipY=footY-27-bob*0.3;   // hips — legs are 27px
-  const shouldY=hipY-16;          // shoulders — torso is 16px
-  const neckY=shouldY-2;          // neck
-  const headY=neckY-3;            // head center
-
-  // Shadow
+  const footY=y-2,hipY=footY-27-bob*0.3,shouldY=hipY-16,neckY=shouldY-2,headY=neckY-3;
   ctx.beginPath();ctx.ellipse(x,footY+4,10,4,0,0,Math.PI*2);ctx.fillStyle='rgba(0,0,0,0.2)';ctx.fill();
-
-  // ── LEGS (27px, split: thigh 14 + shin 13) ──
   const lL=stride*8,rL=-stride*8;ctx.lineCap='round';
   const kneeOff=14;
-  // Back leg (thigh + shin)
   ctx.strokeStyle='#14171e';ctx.lineWidth=2.8;
   const bkX=x+2.5+dx,bkKneeX=bkX-rL*0.25,bkKneeY=hipY+kneeOff,bkFootX=bkX-rL*0.4;
   ctx.beginPath();ctx.moveTo(bkX,hipY);ctx.quadraticCurveTo(bkKneeX+rL*0.1,bkKneeY-2,bkKneeX,bkKneeY);ctx.stroke();
   ctx.strokeStyle='#12151c';ctx.lineWidth=2.6;
   ctx.beginPath();ctx.moveTo(bkKneeX,bkKneeY);ctx.quadraticCurveTo(bkKneeX-rL*0.1,bkKneeY+7,bkFootX,footY);ctx.stroke();
   ctx.beginPath();ctx.ellipse(bkFootX,footY+1.5,3,1.2,0,0,Math.PI*2);ctx.fillStyle='#0a0a0e';ctx.fill();
-  // Front leg
   ctx.strokeStyle='#1a1e26';ctx.lineWidth=3;
   const frX=x-2.5+dx,frKneeX=frX-lL*0.25,frKneeY=hipY+kneeOff,frFootX=frX-lL*0.4;
   ctx.beginPath();ctx.moveTo(frX,hipY);ctx.quadraticCurveTo(frKneeX+lL*0.1,frKneeY-2,frKneeX,frKneeY);ctx.stroke();
   ctx.strokeStyle='#181c24';ctx.lineWidth=2.8;
   ctx.beginPath();ctx.moveTo(frKneeX,frKneeY);ctx.quadraticCurveTo(frKneeX-lL*0.1,frKneeY+7,frFootX,footY);ctx.stroke();
   ctx.beginPath();ctx.ellipse(frFootX,footY+1.5,3,1.2,0,0,Math.PI*2);ctx.fillStyle='#0c0c10';ctx.fill();
-
-  // ── TORSO (16px, narrower at waist) ──
-  const sw=6.5,hw=5;// shoulder half-width, hip half-width
+  const sw=6.5,hw=5;
   ctx.beginPath();ctx.moveTo(x-sw+dx,shouldY);ctx.lineTo(x-hw+dx,hipY);ctx.lineTo(x+hw+dx,hipY);ctx.lineTo(x+sw+dx,shouldY);ctx.closePath();ctx.fillStyle='#181c26';ctx.fill();
-  // Belt line
   ctx.beginPath();ctx.moveTo(x-hw+dx,hipY);ctx.lineTo(x+hw+dx,hipY);ctx.strokeStyle='#111418';ctx.lineWidth=1;ctx.stroke();
-  // Center seam
   ctx.beginPath();ctx.moveTo(x+dx*0.5,shouldY);ctx.lineTo(x+dx*0.5,hipY);ctx.strokeStyle='#10131a';ctx.lineWidth=0.5;ctx.stroke();
-  if(!isBack){
-    // Lapels
-    ctx.beginPath();ctx.moveTo(x-1.5+dx,shouldY+1);ctx.lineTo(x+dx*0.5,shouldY+5);ctx.lineTo(x+1.5+dx,shouldY+1);ctx.strokeStyle='#222838';ctx.lineWidth=0.6;ctx.stroke();
-    // Tie
+  if(!isBack){ctx.beginPath();ctx.moveTo(x-1.5+dx,shouldY+1);ctx.lineTo(x+dx*0.5,shouldY+5);ctx.lineTo(x+1.5+dx,shouldY+1);ctx.strokeStyle='#222838';ctx.lineWidth=0.6;ctx.stroke();
     ctx.beginPath();ctx.moveTo(x+dx*0.5,shouldY+2);ctx.lineTo(x-0.6+dx*0.5,hipY-4);ctx.lineTo(x+dx*0.5,hipY-3);ctx.lineTo(x+0.6+dx*0.5,hipY-4);ctx.closePath();ctx.fillStyle='#3a0e14';ctx.fill();
-    // Collar
     ctx.beginPath();ctx.moveTo(x-2+dx,shouldY);ctx.lineTo(x+dx*0.5,shouldY+2);ctx.lineTo(x+2+dx,shouldY);ctx.strokeStyle='#444e5c';ctx.lineWidth=0.7;ctx.stroke();}
-
-  // ── ARMS (proportional: upper 10px, forearm 10px) ──
   const freeX=x-cf.as*sw+dx,freeS=isM?stride*7:0;
   ctx.strokeStyle='#181c26';ctx.lineWidth=2.4;ctx.lineCap='round';
-  // Free arm: upper
   ctx.beginPath();ctx.moveTo(freeX,shouldY+1);ctx.lineTo(freeX+freeS*0.25,shouldY+11);ctx.stroke();
-  // Free arm: forearm
   ctx.lineWidth=2.2;ctx.beginPath();ctx.moveTo(freeX+freeS*0.25,shouldY+11);ctx.lineTo(freeX+freeS*0.35,shouldY+21);ctx.stroke();
-  // Hand
   ctx.beginPath();ctx.arc(freeX+freeS*0.35,shouldY+22,1.6,0,Math.PI*2);ctx.fillStyle='#b09070';ctx.fill();
-
-  // Flashlight arm: upper
   const flX=x+cf.as*sw+dx,flMidX=flX+cf.fx*3,flMidY=shouldY+10;
   ctx.strokeStyle='#181c26';ctx.lineWidth=2.4;
   ctx.beginPath();ctx.moveTo(flX,shouldY+1);ctx.lineTo(flMidX,flMidY);ctx.stroke();
-  // Forearm extending forward
   const flEX=x+cf.fx*16,flEY=shouldY+4;
   ctx.lineWidth=2.2;ctx.beginPath();ctx.moveTo(flMidX,flMidY);ctx.lineTo(flEX,flEY);ctx.stroke();
   ctx.beginPath();ctx.arc(flEX,flEY,1.6,0,Math.PI*2);ctx.fillStyle='#b09070';ctx.fill();
-  // Flashlight
   ctx.beginPath();ctx.moveTo(flEX,flEY);ctx.lineTo(flEX+cf.fx*7,flEY-0.5);ctx.strokeStyle='#48505a';ctx.lineWidth=2.5;ctx.lineCap='round';ctx.stroke();
   ctx.beginPath();ctx.arc(flEX+cf.fx*8,flEY-1,2,0,Math.PI*2);ctx.fillStyle='#383f48';ctx.fill();
   const flg=ctx.createRadialGradient(flEX+cf.fx*8,flEY-1,0,flEX+cf.fx*8,flEY-1,3.5);flg.addColorStop(0,'rgba(255,255,200,0.4)');flg.addColorStop(1,'transparent');ctx.fillStyle=flg;ctx.beginPath();ctx.arc(flEX+cf.fx*8,flEY-1,3.5,0,Math.PI*2);ctx.fill();
-
-  // ── NECK ──
   ctx.fillStyle='#b09070';ctx.fillRect(x-1.2+dx*0.3,neckY,2.4,2.5);
-
-  // ── HEAD (7px tall, ~4px wide — smaller relative to body) ──
   const hx=x+dx*0.3;
-  // Skin shape
   ctx.beginPath();ctx.moveTo(hx-3.5,headY+1);ctx.quadraticCurveTo(hx-3.8,headY-2,hx-2,headY-4.5);
   ctx.quadraticCurveTo(hx,headY-5.5,hx+2,headY-4.5);ctx.quadraticCurveTo(hx+3.8,headY-2,hx+3.5,headY+1);
   ctx.quadraticCurveTo(hx+2.5,headY+3,hx,headY+3.5);ctx.quadraticCurveTo(hx-2.5,headY+3,hx-3.5,headY+1);ctx.closePath();
   ctx.fillStyle='#b89878';ctx.fill();
-  // Hair
   ctx.beginPath();ctx.moveTo(hx-3.8,headY);ctx.quadraticCurveTo(hx-4,headY-3,hx-2,headY-5);
   ctx.quadraticCurveTo(hx,headY-6,hx+2,headY-5);ctx.quadraticCurveTo(hx+4,headY-3,hx+3.8,headY);
   ctx.quadraticCurveTo(hx+2.5,headY-1.5,hx,headY-2.5);ctx.quadraticCurveTo(hx-2.5,headY-1.5,hx-3.8,headY);ctx.closePath();
   ctx.fillStyle='#151210';ctx.fill();
-  if(isBack){
-    // Back view — hair covers most of head
-    ctx.beginPath();ctx.moveTo(hx-3.5,headY+1);ctx.quadraticCurveTo(hx-3.8,headY-2,hx-2,headY-4.5);
+  if(isBack){ctx.beginPath();ctx.moveTo(hx-3.5,headY+1);ctx.quadraticCurveTo(hx-3.8,headY-2,hx-2,headY-4.5);
     ctx.quadraticCurveTo(hx,headY-5.5,hx+2,headY-4.5);ctx.quadraticCurveTo(hx+3.8,headY-2,hx+3.5,headY+1);
     ctx.quadraticCurveTo(hx+2,headY+2,hx,headY+2);ctx.quadraticCurveTo(hx-2,headY+2,hx-3.5,headY+1);ctx.closePath();
     ctx.fillStyle='#151210';ctx.fill();}
-
   ctx.restore();}
 
 function drawGuard(ctx,x,y,ts,gd,br){ctx.save();
-  const footY=y-2,py=footY-35;ctx.globalAlpha=Math.min(1,br+0.1);
-  // Shadow
-  ctx.beginPath();ctx.ellipse(x,footY+4,10,4,0,0,Math.PI*2);ctx.fillStyle='rgba(0,0,0,0.2)';ctx.fill();
-  // Legs (simple)
-  ctx.strokeStyle='#1a1a2a';ctx.lineWidth=3;ctx.lineCap='round';
-  ctx.beginPath();ctx.moveTo(x-3,py+25);ctx.lineTo(x-3,footY+1);ctx.stroke();
-  ctx.beginPath();ctx.moveTo(x+3,py+25);ctx.lineTo(x+3,footY+1);ctx.stroke();
-  // Body (darker uniform)
-  ctx.fillStyle='#1a1a30';ctx.fillRect(x-7,py+8,14,18);
-  // Shoulders
-  ctx.fillStyle='#222240';ctx.fillRect(x-8,py+8,16,5);
-  // Head (dark cap)
-  ctx.beginPath();ctx.ellipse(x,py+2,5,6,0,0,Math.PI*2);ctx.fillStyle='#b89878';ctx.fill();
-  ctx.beginPath();ctx.ellipse(x,py-2,5.5,3.5,0,Math.PI*0.85,Math.PI*2.15);ctx.fillStyle='#1a1a30';ctx.fill();
-  // Red flashlight beam indicator
+  ctx.globalAlpha=Math.min(1,br+0.1);
+  // Ground shadow
+  ctx.beginPath();ctx.ellipse(x,y-2,22,8,0,0,Math.PI*2);
+  ctx.fillStyle='rgba(0,0,0,0.22)';ctx.fill();
+
+  if(GUARD_READY){
+    const FRAMES=8;
+    const isMoving=(gd.walkCycle||0)>0;
+    const frame=isMoving?Math.floor(((gd.walkCycle||0)/1.76)*FRAMES)%FRAMES:0;
+    const row=GUARD_DIR_ROW[gd.facing||'sw']??2;
+    const scale=0.5;
+    const dw=GUARD_W*scale, dh=GUARD_H*scale;
+    ctx.drawImage(_guardImg, frame*GUARD_W, row*GUARD_H, GUARD_W, GUARD_H,
+                  x-dw/2, y-dh+8, dw, dh);
+  } else {
+    // Fallback: simple procedural guard
+    const footY=y-2,py=footY-35;
+    ctx.strokeStyle='#1a1a2a';ctx.lineWidth=3;ctx.lineCap='round';
+    ctx.beginPath();ctx.moveTo(x-3,py+25);ctx.lineTo(x-3,footY+1);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(x+3,py+25);ctx.lineTo(x+3,footY+1);ctx.stroke();
+    ctx.fillStyle='#1a1a30';ctx.fillRect(x-7,py+8,14,18);
+    ctx.fillStyle='#222240';ctx.fillRect(x-8,py+8,16,5);
+    ctx.beginPath();ctx.ellipse(x,py+2,5,6,0,0,Math.PI*2);ctx.fillStyle='#b89878';ctx.fill();
+    ctx.beginPath();ctx.ellipse(x,py-2,5.5,3.5,0,Math.PI*0.85,Math.PI*2.15);ctx.fillStyle='#1a1a30';ctx.fill();
+  }
+
+  // Red sight-range cone (always visible)
   const bAng=Math.atan2(gd.dir.y,gd.dir.x);const bLen=gd.sightRange*TW*0.15;
-  const bx=x+Math.cos(bAng)*5,by=py+10+Math.sin(bAng)*5;
+  const bx=x+Math.cos(bAng)*5,by=y-40+Math.sin(bAng)*5;
   const bex=bx+Math.cos(bAng)*bLen,bey=by+Math.sin(bAng)*bLen;
   ctx.globalAlpha=0.15*br;ctx.beginPath();ctx.moveTo(bx,by);
   ctx.lineTo(bex-Math.sin(bAng)*bLen*0.3,bey+Math.cos(bAng)*bLen*0.3);
   ctx.lineTo(bex+Math.sin(bAng)*bLen*0.3,bey-Math.cos(bAng)*bLen*0.3);ctx.closePath();
   ctx.fillStyle='rgba(255,40,40,0.4)';ctx.fill();
-  // Red LED on cap
+  // Flashing red LED on cap
   const flash=Math.sin(ts/200)>0?0.8:0.3;ctx.globalAlpha=flash;ctx.fillStyle='#ff2222';
-  ctx.beginPath();ctx.arc(x,py-3,1.5,0,Math.PI*2);ctx.fill();
+  ctx.beginPath();ctx.arc(x,y-55,1.5,0,Math.PI*2);ctx.fill();
   ctx.globalAlpha=1;ctx.restore();}
 
 function drawBeam(ctx,px,py,player,g){ctx.save();const fd=player.dir;
@@ -873,34 +1091,32 @@ function drawBeam(ctx,px,py,player,g){ctx.save();const fd=player.dir;
   const nx=d2x/len,ny=d2y/len,bL=g.flashRadius*TW*0.4;const fy=py-32;
   const ex=px+nx*bL,ey=fy+ny*bL;
   ctx.beginPath();ctx.moveTo(px,fy);ctx.lineTo(ex-ny*bL*0.45,ey-nx*bL*0.05);ctx.lineTo(ex+ny*bL*0.45,ey+nx*bL*0.05);ctx.closePath();
-  const gr=ctx.createLinearGradient(px,fy,ex,ey);gr.addColorStop(0,'rgba(255,255,220,0.04)');gr.addColorStop(0.3,'rgba(255,255,200,0.018)');gr.addColorStop(1,'rgba(255,255,180,0)');
+  const gr=ctx.createLinearGradient(px,fy,ex,ey);gr.addColorStop(0,'rgba(255,255,220,0.05)');gr.addColorStop(0.25,'rgba(255,255,210,0.022)');gr.addColorStop(1,'rgba(255,255,180,0)');
   ctx.fillStyle=gr;ctx.fill();ctx.restore();}
 
 function drawHUD(ctx,W,H,g,ts,mob){const fs=mob?10:14,sf=mob?9:11,bH=mob?28:38;
-  ctx.fillStyle='rgba(0,0,0,0.5)';ctx.fillRect(0,0,W,bH);ctx.fillStyle='rgba(0,170,255,0.06)';ctx.fillRect(0,bH-1,W,1);
-  ctx.font=`bold ${fs}px "JetBrains Mono","Fira Code",monospace`;ctx.fillStyle='#0af';ctx.textAlign='left';ctx.fillText(`◆ DATACENTER DISASTER — LVL ${g.level}`,10,bH*0.65);
-  // Count-up timer (center)
+  ctx.fillStyle='rgba(0,0,0,0.55)';ctx.fillRect(0,0,W,bH);
+  // GBC-purple accent line
+  ctx.fillStyle='rgba(160,60,220,0.18)';ctx.fillRect(0,bH-1,W,1);
+  ctx.font=`bold ${fs}px "JetBrains Mono","Fira Code",monospace`;ctx.fillStyle='#aa66ff';ctx.textAlign='left';ctx.fillText(`◆ DATACENTER DISASTER — LVL ${g.level}`,10,bH*0.65);
   const mins=Math.floor(g.elapsed/60),secs=g.elapsed%60;
   const tCol=g.elapsed<g.parTime?'#22ff66':g.elapsed<g.parTime*1.5?'#ffaa00':'#ff4444';
   ctx.textAlign='center';ctx.font=`bold ${sf}px "JetBrains Mono","Fira Code",monospace`;ctx.fillStyle=tCol;ctx.fillText(`${mins}:${String(secs).padStart(2,'0')}`,W/2,bH*0.5);
   ctx.textAlign='right';ctx.fillStyle='#ffd700';let st='';for(let i=0;i<g.totalDrives;i++)st+=i<g.score?'◆ ':'◇ ';ctx.fillText(st,W-10,bH*0.65);
   ctx.font=`${sf}px "JetBrains Mono","Fira Code",monospace`;ctx.fillStyle='#556';ctx.fillText(`${g.score}/${g.totalDrives} DRIVES`,W-10,bH*0.35);
   ctx.textAlign='left';const col=USB_COLORS[g.levelColor];ctx.fillStyle=col.hex;ctx.fillText(`◈ ${g.fragments.length} FRAGS`,10,bH*0.35);
-  // USB inventory as colored dots
   const usbX=mob?90:120;let udx=usbX;
   for(const ci of g.usbInventory){ctx.fillStyle=USB_COLORS[ci].hex;ctx.beginPath();ctx.arc(udx,bH*0.35-1,3,0,Math.PI*2);ctx.fill();udx+=8;}
-  // Level complete screen with score entry
-  if(g.levelComplete){ctx.fillStyle='rgba(0,0,0,0.82)';ctx.fillRect(0,0,W,H);const p=0.8+Math.sin(ts/300)*0.2;ctx.textAlign='center';
+
+  if(g.levelComplete){ctx.fillStyle='rgba(0,0,0,0.84)';ctx.fillRect(0,0,W,H);const p=0.8+Math.sin(ts/300)*0.2;ctx.textAlign='center';
     ctx.font=`bold ${mob?20:32}px "JetBrains Mono","Fira Code",monospace`;ctx.fillStyle=`rgba(255,215,0,${p})`;ctx.fillText(`◆ LEVEL ${g.level} COMPLETE ◆`,W/2,H/2-80);
-    ctx.font=`${mob?11:14}px "JetBrains Mono","Fira Code",monospace`;ctx.fillStyle='#0af';
+    ctx.font=`${mob?11:14}px "JetBrains Mono","Fira Code",monospace`;ctx.fillStyle='#aa66ff';
     ctx.fillText(`Time: ${Math.floor(g.elapsed/60)}m ${g.elapsed%60}s · ${g.brokenServers.filter(b=>b.fixed).length} servers repaired`,W/2,H/2-50);
-    // Score display
     ctx.font=`bold ${mob?16:24}px "JetBrains Mono","Fira Code",monospace`;ctx.fillStyle='#ffd700';
     ctx.fillText(`SCORE: ${g.levelScore.toLocaleString()}`,W/2,H/2-20);
     const bonusT=Math.max(0,g.parTime-g.elapsed);
     ctx.font=`${mob?9:11}px "JetBrains Mono","Fira Code",monospace`;ctx.fillStyle=bonusT>0?'#22ff66':'#ff4444';
     ctx.fillText(bonusT>0?`${bonusT}s under par (+${bonusT*10*g.level} bonus)`:`${Math.abs(bonusT)}s over par (no time bonus)`,W/2,H/2+2);
-    // Initials entry
     if(g.showScoreEntry){
       ctx.font=`${mob?10:13}px "JetBrains Mono","Fira Code",monospace`;ctx.fillStyle='#888';ctx.fillText('ENTER YOUR INITIALS',W/2,H/2+28);
       const iW=30,iG=8,iTotalW=iW*3+iG*2,iSX=W/2-iTotalW/2,iY=H/2+38;
@@ -911,57 +1127,43 @@ function drawHUD(ctx,W,H,g,ts,mob){const fs=mob?10:14,sf=mob?9:11,bH=mob?28:38;
         if(sel){ctx.font='10px monospace';ctx.fillStyle='#ffd700';ctx.fillText('▲',ix+iW/2,iY-6);ctx.fillText('▼',ix+iW/2,iY+44);}}
       ctx.font=`bold ${mob?11:14}px "JetBrains Mono","Fira Code",monospace`;ctx.fillStyle='#ffd700';ctx.fillText('◀▶ move · ▲▼ change · ENTER submit',W/2,H/2+95);}
     else{ctx.font=`bold ${mob?13:18}px "JetBrains Mono","Fira Code",monospace`;ctx.fillStyle='#ffd700';ctx.fillText('PRESS ENTER FOR NEXT LEVEL',W/2,H/2+50);}}
-  // Game over screen
-  if(g.gameOver){ctx.fillStyle='rgba(0,0,0,0.8)';ctx.fillRect(0,0,W,H);const p=0.7+Math.sin(ts/200)*0.3;ctx.textAlign='center';
+
+  if(g.gameOver){ctx.fillStyle='rgba(0,0,0,0.82)';ctx.fillRect(0,0,W,H);const p=0.7+Math.sin(ts/200)*0.3;ctx.textAlign='center';
     ctx.font=`bold ${mob?20:32}px "JetBrains Mono","Fira Code",monospace`;ctx.fillStyle=`rgba(255,68,68,${p})`;
     ctx.fillText('DETECTED BY SECURITY',W/2,H/2-30);
     ctx.font=`${mob?11:15}px "JetBrains Mono","Fira Code",monospace`;ctx.fillStyle='#888';ctx.fillText(`Level ${g.level} · ${g.score}/${g.totalDrives} drives recovered`,W/2,H/2+5);
     ctx.font=`bold ${mob?12:16}px "JetBrains Mono","Fira Code",monospace`;ctx.fillStyle='#ff4444';ctx.fillText('PRESS ENTER TO RETRY',W/2,H/2+35);}
-  // ── PALM PILOT MINIMAP DEVICE ──
+
+  // Palm Pilot minimap
   const ms=mob?2:3,mapW=MW*ms,mapH=MH*ms;
   const devPad=6,devR=8,headerH=16,footerH=10;
   const devW=mapW+devPad*2+4,devH=mapH+devPad*2+headerH+footerH+4;
   const devX=8,devY=H-devH-8;
   const mx=devX+devPad+2,my=devY+devPad+headerH+2;
-  // Device body — rounded dark shell
-  ctx.fillStyle='#1a1c22';ctx.beginPath();
+  // Device shell — now with GBC purple tint
+  ctx.fillStyle='#14101e';ctx.beginPath();
   ctx.moveTo(devX+devR,devY);ctx.lineTo(devX+devW-devR,devY);ctx.quadraticCurveTo(devX+devW,devY,devX+devW,devY+devR);
   ctx.lineTo(devX+devW,devY+devH-devR);ctx.quadraticCurveTo(devX+devW,devY+devH,devX+devW-devR,devY+devH);
   ctx.lineTo(devX+devR,devY+devH);ctx.quadraticCurveTo(devX,devY+devH,devX,devY+devH-devR);
   ctx.lineTo(devX,devY+devR);ctx.quadraticCurveTo(devX,devY,devX+devR,devY);ctx.closePath();ctx.fill();
-  // Device border
-  ctx.strokeStyle='#333842';ctx.lineWidth=1.5;ctx.stroke();
-  // Inner bezel highlight
-  ctx.strokeStyle='rgba(60,70,90,0.4)';ctx.lineWidth=0.5;
-  ctx.strokeRect(devX+2,devY+2,devW-4,devH-4);
-  // Screen inset
-  ctx.fillStyle='rgba(0,4,10,0.85)';ctx.fillRect(mx-2,my-2,mapW+4,mapH+4);
-  ctx.strokeStyle='rgba(0,80,120,0.2)';ctx.lineWidth=0.5;ctx.strokeRect(mx-2,my-2,mapW+4,mapH+4);
-  // Grid location text above radar
-  ctx.font=`bold ${mob?7:9}px "JetBrains Mono",monospace`;ctx.textAlign='center';ctx.fillStyle='#0af';
+  ctx.strokeStyle='#2a1848';ctx.lineWidth=1.5;ctx.stroke();
+  ctx.strokeStyle='rgba(80,30,120,0.35)';ctx.lineWidth=0.5;ctx.strokeRect(devX+2,devY+2,devW-4,devH-4);
+  ctx.fillStyle='rgba(0,2,8,0.88)';ctx.fillRect(mx-2,my-2,mapW+4,mapH+4);
+  ctx.strokeStyle='rgba(80,20,120,0.2)';ctx.lineWidth=0.5;ctx.strokeRect(mx-2,my-2,mapW+4,mapH+4);
+  ctx.font=`bold ${mob?7:9}px "JetBrains Mono",monospace`;ctx.textAlign='center';ctx.fillStyle='#aa66ff';
   ctx.fillText(`GRID: ${g.player.x},${g.player.y}`,devX+devW/2,devY+headerH-2);
-  // Subtle header line
-  ctx.fillStyle='rgba(0,170,255,0.12)';ctx.fillRect(devX+devPad,devY+headerH,devW-devPad*2,1);
-  // Radar grid
+  ctx.fillStyle='rgba(160,60,220,0.1)';ctx.fillRect(devX+devPad,devY+headerH,devW-devPad*2,1);
   for(let gy=0;gy<MH;gy++)for(let gx=0;gx<MW;gx++){const d=Math.sqrt((gx-g.player.x)**2+(gy-g.player.y)**2);
-    if(d<g.flashRadius+2){ctx.fillStyle=g.maze[gy][gx]===1?'rgba(25,35,55,0.8)':'rgba(8,12,20,0.5)';ctx.fillRect(mx+gx*ms,my+gy*ms,ms,ms);}}
-  // Radar sweep line
+    if(d<g.flashRadius+2){ctx.fillStyle=g.maze[gy][gx]===1?'rgba(20,12,35,0.85)':'rgba(6,8,18,0.6)';ctx.fillRect(mx+gx*ms,my+gy*ms,ms,ms);}}
   const sweepAng=ts/2000*Math.PI*2;const sweepLen=g.flashRadius*ms;
-  ctx.globalAlpha=0.08;ctx.strokeStyle='#0af';ctx.lineWidth=1;
+  ctx.globalAlpha=0.08;ctx.strokeStyle='#aa66ff';ctx.lineWidth=1;
   ctx.beginPath();ctx.moveTo(mx+g.player.x*ms,my+g.player.y*ms);
   ctx.lineTo(mx+g.player.x*ms+Math.cos(sweepAng)*sweepLen,my+g.player.y*ms+Math.sin(sweepAng)*sweepLen);ctx.stroke();ctx.globalAlpha=1;
-  // Player blip
   ctx.fillStyle='#0ff';ctx.fillRect(mx+g.player.x*ms-1,my+g.player.y*ms-1,ms+1,ms+1);
-  // Drives
   for(const d of g.drives){if(d.collected)continue;if(Math.sqrt((d.x-g.player.x)**2+(d.y-g.player.y)**2)<g.flashRadius){ctx.fillStyle='#ffd700';ctx.fillRect(mx+d.x*ms,my+d.y*ms,ms,ms);}}
-  // Broken servers
   for(const bs of g.brokenServers){if(bs.fixed)continue;if(Math.sqrt((bs.x-g.player.x)**2+(bs.y-g.player.y)**2)<g.flashRadius){const bcol=bs.toolType>=0?TOOL_TYPES[bs.toolType]:USB_COLORS[bs.colorIndex];ctx.fillStyle=bcol.hex;ctx.fillRect(mx+bs.x*ms,my+bs.y*ms,ms,ms);}}
-  // USB sticks
   for(const usb of g.usbSticks){if(usb.collected)continue;if(Math.sqrt((usb.x-g.player.x)**2+(usb.y-g.player.y)**2)<g.flashRadius){ctx.fillStyle=USB_COLORS[usb.colorIndex].hex;ctx.globalAlpha=0.6+Math.sin(ts/300)*0.3;ctx.fillRect(mx+usb.x*ms,my+usb.y*ms,ms,ms);ctx.globalAlpha=1;}}
-  // Tools
   for(const tool of g.tools){if(tool.collected)continue;if(Math.sqrt((tool.x-g.player.x)**2+(tool.y-g.player.y)**2)<g.flashRadius){ctx.fillStyle=TOOL_TYPES[tool.toolType].hex;ctx.globalAlpha=0.6+Math.sin(ts/300)*0.3;ctx.fillRect(mx+tool.x*ms,my+tool.y*ms,ms,ms);ctx.globalAlpha=1;}}
-  // Guards
   for(const gd of g.guards){if(Math.sqrt((gd.x-g.player.x)**2+(gd.y-g.player.y)**2)<g.flashRadius){ctx.fillStyle='#ff2222';ctx.globalAlpha=0.6+Math.sin(ts/200)*0.4;ctx.fillRect(mx+Math.round(gd.x)*ms,my+Math.round(gd.y)*ms,ms,ms);ctx.globalAlpha=1;}}
-  // Footer — device brand text
-  ctx.font=`${mob?5:6}px "JetBrains Mono",monospace`;ctx.textAlign='center';ctx.fillStyle='#2a2e38';
+  ctx.font=`${mob?5:6}px "JetBrains Mono",monospace`;ctx.textAlign='center';ctx.fillStyle='#2a1440';
   ctx.fillText('PIVITAL OS',devX+devW/2,devY+devH-3);}
